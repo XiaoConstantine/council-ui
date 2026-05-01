@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -431,6 +432,8 @@ func (m Model) renderDetail(width, height int) string {
 	}
 	lines = append(lines, "")
 	lines = append(lines, m.renderPipeline(run, width)...)
+	lines = append(lines, "")
+	lines = append(lines, m.renderArtifactSummary(run, width)...)
 	if len(run.Missing) > 0 {
 		lines = append(lines, "")
 		lines = append(lines, sectionTitle.Render("Waiting On"))
@@ -453,24 +456,39 @@ func (m Model) renderDetail(width, height int) string {
 func (m Model) renderPipeline(run protocol.Run, width int) []string {
 	plansDone := countDone(run.Artifacts.Plans)
 	critiquesDone := countDone(run.Artifacts.Critiques)
-	implementation := mark(run.Artifacts.Implementation)
-	finalPlan := mark(run.Artifacts.FinalPlan)
-	review := "○"
+	reviewDone := false
 	if len(run.Artifacts.ReviewRounds) > 0 {
 		for _, round := range run.Artifacts.ReviewRounds {
 			if round.CC && round.AMP {
-				review = "●"
+				reviewDone = true
 			}
 		}
 	}
-	line := fmt.Sprintf("%s plans %d/3   %s critiques %d/3   %s final   %s impl   %s review",
-		mark(plansDone == 3), plansDone,
-		mark(critiquesDone == 3), critiquesDone,
-		finalPlan,
-		implementation,
-		review,
-	)
-	return []string{sectionTitle.Render("Progress"), truncate(line, width-4)}
+	return []string{
+		sectionTitle.Render("Progress"),
+		truncate(fmt.Sprintf("%s plans %d/3   %s critiques %d/3   %s final",
+			mark(plansDone == 3), plansDone,
+			mark(critiquesDone == 3), critiquesDone,
+			mark(run.Artifacts.FinalPlan),
+		), width-4),
+		truncate(fmt.Sprintf("%s implementation   %s review",
+			mark(run.Artifacts.Implementation),
+			mark(reviewDone),
+		), width-4),
+	}
+}
+
+func (m Model) renderArtifactSummary(run protocol.Run, width int) []string {
+	reviewStatus := "pending"
+	if run.Verdicts.CC != "" || run.Verdicts.AMP != "" {
+		reviewStatus = fmt.Sprintf("cc=%s amp=%s", fallback(run.Verdicts.CC, "-"), fallback(run.Verdicts.AMP, "-"))
+	}
+
+	return []string{
+		sectionTitle.Render("Artifacts"),
+		truncate(fmt.Sprintf("%s final plan   %s implementation", mark(run.Artifacts.FinalPlan), mark(run.Artifacts.Implementation)), width-4),
+		truncate(fmt.Sprintf("%s reviews %s", mark(reviewStatus != "pending"), reviewStatus), width-4),
+	}
 }
 
 func (m Model) renderPreview(width, height int) string {
@@ -484,9 +502,7 @@ func (m Model) renderPreview(width, height int) string {
 	lines = append(lines, header)
 	lines = append(lines, m.renderAgentTabs(width))
 	if !ok {
-		lines = append(lines, "")
-		lines = append(lines, emptyStyle.Render("No live pane for this run or instance."))
-		return strings.Join(fitLines(lines, height-1), "\n")
+		return m.renderArtifactPreview(lines, width, height)
 	}
 	lines = append(lines, "")
 	if strings.TrimSpace(m.preview) == "" {
@@ -499,6 +515,90 @@ func (m Model) renderPreview(width, height int) string {
 	return strings.Join(fitLines(lines, height-1), "\n")
 }
 
+func (m Model) renderArtifactPreview(lines []string, width, height int) string {
+	run, ok := m.selectedRunSnapshot()
+	if !ok {
+		lines = append(lines, "", emptyStyle.Render("No run selected."))
+		return strings.Join(fitLines(lines, height-1), "\n")
+	}
+
+	path, label := artifactPreviewPath(run, agentOrder[m.selectedAgent])
+	lines[0] = sectionTitle.Render("Artifact")
+	lines = append(lines, "")
+	if path == "" {
+		lines = append(lines, emptyStyle.Render("No live pane and no artifact for this tab."))
+		return strings.Join(fitLines(lines, height-1), "\n")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		lines = append(lines, emptyStyle.Render("No live pane. Could not read "+label+"."))
+		return strings.Join(fitLines(lines, height-1), "\n")
+	}
+
+	lines = append(lines, strongStyle.Render(label))
+	lines = append(lines, mutedStyle.Render(shortPath(path)))
+	lines = append(lines, "")
+	for _, line := range headMeaningfulLines(string(data), max(3, height-7)) {
+		lines = append(lines, truncate(line, width-4))
+	}
+	return strings.Join(fitLines(lines, height-1), "\n")
+}
+
+func artifactPreviewPath(run protocol.Run, role string) (path string, label string) {
+	switch role {
+	case "codex":
+		if run.Artifacts.Implementation {
+			return filepath.Join(run.Dir, "implementation", "codex.md"), "implementation/codex.md"
+		}
+		if run.Artifacts.FinalPlan {
+			return filepath.Join(run.Dir, "plan.final.md"), "plan.final.md"
+		}
+		if run.Artifacts.Plans["codex"] {
+			return filepath.Join(run.Dir, "plans", "codex.md"), "plans/codex.md"
+		}
+	case "cc":
+		if reviewPath := latestReviewPath(run, "cc"); reviewPath != "" {
+			return reviewPath, strings.TrimPrefix(reviewPath, run.Dir+"/")
+		}
+		if run.Artifacts.Critiques["cc"] {
+			return filepath.Join(run.Dir, "critiques", "cc.md"), "critiques/cc.md"
+		}
+		if run.Artifacts.Plans["cc"] {
+			return filepath.Join(run.Dir, "plans", "cc.md"), "plans/cc.md"
+		}
+	case "amp":
+		if reviewPath := latestReviewPath(run, "amp"); reviewPath != "" {
+			return reviewPath, strings.TrimPrefix(reviewPath, run.Dir+"/")
+		}
+		if run.Artifacts.Critiques["amp"] {
+			return filepath.Join(run.Dir, "critiques", "amp.md"), "critiques/amp.md"
+		}
+		if run.Artifacts.Plans["amp"] {
+			return filepath.Join(run.Dir, "plans", "amp.md"), "plans/amp.md"
+		}
+	case "orchestrator":
+		progress := filepath.Join(run.Dir, "progress.log")
+		if fileExists(progress) {
+			return progress, "progress.log"
+		}
+	}
+	return "", ""
+}
+
+func latestReviewPath(run protocol.Run, role string) string {
+	for i := len(run.Artifacts.ReviewRounds) - 1; i >= 0; i-- {
+		round := run.Artifacts.ReviewRounds[i]
+		if role == "cc" && round.CC {
+			return filepath.Join(run.Dir, "reviews", fmt.Sprintf("cc.round-%d.md", round.Round))
+		}
+		if role == "amp" && round.AMP {
+			return filepath.Join(run.Dir, "reviews", fmt.Sprintf("amp.round-%d.md", round.Round))
+		}
+	}
+	return ""
+}
+
 func (m Model) renderAgentTabs(width int) string {
 	var parts []string
 	for i, role := range agentOrder {
@@ -506,7 +606,7 @@ func (m Model) renderAgentTabs(width int) string {
 		if i == m.selectedAgent {
 			style = activeTabStyle
 		}
-		parts = append(parts, style.Render(role))
+		parts = append(parts, style.Render(agentTabLabel(role)))
 	}
 	return truncate(strings.Join(parts, " "), width-4)
 }
@@ -659,8 +759,36 @@ func tailLines(value string, count int) []string {
 	return lines[len(lines)-count:]
 }
 
+func headMeaningfulLines(value string, count int) []string {
+	raw := strings.Split(strings.TrimRight(value, "\n"), "\n")
+	lines := make([]string, 0, min(len(raw), count))
+	blank := false
+	for _, line := range raw {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			if blank || len(lines) == 0 {
+				continue
+			}
+			blank = true
+			lines = append(lines, "")
+		} else {
+			blank = false
+			lines = append(lines, line)
+		}
+		if len(lines) >= count {
+			break
+		}
+	}
+	return lines
+}
+
 func stripControlNoise(value string) string {
 	return strings.ReplaceAll(value, "\x1b[?25h", "")
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func fallback(value, fallback string) string {
@@ -689,6 +817,13 @@ func min(a, b int) int {
 }
 
 var agentOrder = []string{"codex", "cc", "amp", "orchestrator"}
+
+func agentTabLabel(role string) string {
+	if role == "orchestrator" {
+		return "orch"
+	}
+	return role
+}
 
 var (
 	titleBar = lipgloss.NewStyle().
