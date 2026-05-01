@@ -1,0 +1,6 @@
+.DS_Store
+/bin/
+/dist/
+/council-ui
+*.test
+coverage.out
