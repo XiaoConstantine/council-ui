@@ -29,7 +29,21 @@ go build ./cmd/council-ui
 
 ## Run
 
-Point the UI at a workspace that contains `council-out`:
+Run without flags to choose a project interactively. The picker scans the
+current directory and its parent for workspaces that contain
+`council-out/runs`:
+
+```bash
+council-ui
+```
+
+To scan a specific parent directory:
+
+```bash
+council-ui --projects-root /path/to/repos
+```
+
+To skip the picker, point the UI at a workspace that contains `council-out`:
 
 ```bash
 council-ui --workspace /path/to/workspace
@@ -41,15 +55,26 @@ Or pass the council home directly:
 council-ui --home /path/to/workspace/council-out
 ```
 
-When neither flag is passed, the UI uses `MAESTRO_COUNCIL_HOME` if set,
-otherwise `./council-out`.
+The interactive picker intentionally scans project workspaces instead of
+silently loading a global home. Use `--home` when a project stores council
+artifacts outside its workspace.
 
 ## Keys
+
+Project picker:
+
+- `j` / `k`: move through projects
+- `Enter`: load selected project
+- `r`: rescan
+- `q`: quit
+
+Dashboard:
 
 - `j` / `k`: move through runs
 - `Tab`: cycle codex, cc, amp, orchestrator pane preview
 - `Enter`: switch tmux focus to the selected live pane
 - `/`: filter by run id, task, workspace, instance, phase, or stage
+- `P`: return to project picker
 - `r`: refresh immediately
 - `q`: quit
 

@@ -17,6 +17,7 @@ func main() {
 	var (
 		home            string
 		workspace       string
+		projectsRoot    string
 		limit           int
 		maxReviewRounds int
 		refresh         time.Duration
@@ -24,17 +25,23 @@ func main() {
 
 	flag.StringVar(&home, "home", "", "path to council-out")
 	flag.StringVar(&workspace, "workspace", "", "workspace containing council-out")
+	flag.StringVar(&projectsRoot, "projects-root", "", "directory to scan for projects with council-out")
 	flag.IntVar(&limit, "limit", 40, "maximum runs to show")
 	flag.IntVar(&maxReviewRounds, "max-review-rounds", protocol.DefaultMaxReviewRounds, "maximum council review rounds")
 	flag.DurationVar(&refresh, "refresh", time.Second, "refresh interval")
 	flag.Parse()
 
-	if home == "" {
-		home = protocol.CouncilHome(workspace)
+	var projectRoots []string
+	if home == "" && workspace != "" {
+		home = protocol.CouncilHomeNoEnv(workspace)
+	}
+	if projectsRoot != "" {
+		projectRoots = append(projectRoots, projectsRoot)
 	}
 
 	model := ui.New(ui.Options{
-		Home: home,
+		Home:         home,
+		ProjectRoots: projectRoots,
 		Load: protocol.LoadOptions{
 			Limit:           limit,
 			MaxReviewRounds: maxReviewRounds,

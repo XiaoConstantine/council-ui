@@ -15,28 +15,38 @@ import (
 )
 
 type Options struct {
-	Home    string
-	Load    protocol.LoadOptions
-	Refresh time.Duration
+	Home         string
+	ProjectRoots []string
+	Load         protocol.LoadOptions
+	Refresh      time.Duration
 }
 
 type Model struct {
-	opts          Options
-	tmux          tmux.Client
-	runs          []protocol.Run
-	councils      []tmux.Council
-	panes         []tmux.Pane
-	selectedRun   int
-	selectedAgent int
-	width         int
-	height        int
-	filter        string
-	filtering     bool
-	preview       string
-	err           error
-	tmuxErr       error
-	status        string
-	loadedAt      time.Time
+	opts            Options
+	tmux            tmux.Client
+	choosingProject bool
+	projects        []protocol.Project
+	selectedProject int
+	runs            []protocol.Run
+	councils        []tmux.Council
+	panes           []tmux.Pane
+	selectedRun     int
+	selectedAgent   int
+	width           int
+	height          int
+	filter          string
+	filtering       bool
+	preview         string
+	err             error
+	projectErr      error
+	tmuxErr         error
+	status          string
+	loadedAt        time.Time
+}
+
+type projectsMsg struct {
+	projects []protocol.Project
+	err      error
 }
 
 type refreshMsg struct {
@@ -60,13 +70,17 @@ func New(opts Options) Model {
 		opts.Refresh = time.Second
 	}
 	return Model{
-		opts:          opts,
-		tmux:          tmux.Client{},
-		selectedAgent: 0,
+		opts:            opts,
+		tmux:            tmux.Client{},
+		choosingProject: opts.Home == "",
+		selectedAgent:   0,
 	}
 }
 
 func (m Model) Init() tea.Cmd {
+	if m.choosingProject {
+		return m.discoverProjectsCmd()
+	}
 	return tea.Batch(m.refreshCmd(), tick(m.opts.Refresh))
 }
 
@@ -77,7 +91,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case tickMsg:
+		if m.choosingProject {
+			return m, nil
+		}
 		return m, tea.Batch(m.refreshCmd(), tick(m.opts.Refresh))
+	case projectsMsg:
+		m.projects = msg.projects
+		m.projectErr = msg.err
+		if m.selectedProject >= len(m.projects) {
+			m.selectedProject = max(0, len(m.projects)-1)
+		}
+		return m, nil
 	case refreshMsg:
 		m.runs = msg.runs
 		m.councils = msg.councils
@@ -98,6 +122,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyMsg:
+		if m.choosingProject {
+			return m.updateProjectPicker(msg)
+		}
 		if m.filtering {
 			return m.updateFilter(msg)
 		}
@@ -132,10 +159,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.switchCmd(pane)
 		case "r":
 			return m, m.refreshCmd()
+		case "P":
+			m.choosingProject = true
+			m.status = ""
+			return m, m.discoverProjectsCmd()
 		case "/":
 			m.filtering = true
 			return m, nil
 		}
+	}
+	return m, nil
+}
+
+func (m Model) updateProjectPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "q":
+		return m, tea.Quit
+	case "j", "down":
+		if m.selectedProject < len(m.projects)-1 {
+			m.selectedProject++
+		}
+	case "k", "up":
+		if m.selectedProject > 0 {
+			m.selectedProject--
+		}
+	case "r":
+		return m, m.discoverProjectsCmd()
+	case "enter":
+		if len(m.projects) == 0 {
+			return m, nil
+		}
+		project := m.projects[m.selectedProject]
+		m.opts.Home = project.Home
+		m.choosingProject = false
+		m.selectedRun = 0
+		m.filter = ""
+		m.filtering = false
+		m.status = "loaded " + project.Name
+		return m, tea.Batch(m.refreshCmd(), tick(m.opts.Refresh))
 	}
 	return m, nil
 }
@@ -167,6 +228,14 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	if m.width == 0 {
 		return "loading..."
+	}
+
+	if m.choosingProject {
+		top := m.renderProjectTop()
+		bottom := footer.Width(m.width).Render("j/k move  enter load  r rescan  q quit")
+		bodyHeight := max(8, m.height-lipgloss.Height(top)-lipgloss.Height(bottom))
+		body := projectBox.Width(m.width).Height(bodyHeight).Render(m.renderProjectPicker(m.width, bodyHeight))
+		return lipgloss.JoinVertical(lipgloss.Left, top, body, bottom)
 	}
 
 	top := m.renderTop()
@@ -216,6 +285,13 @@ func (m Model) refreshCmd() tea.Cmd {
 	}
 }
 
+func (m Model) discoverProjectsCmd() tea.Cmd {
+	return func() tea.Msg {
+		projects, err := protocol.DiscoverProjects(m.opts.ProjectRoots)
+		return projectsMsg{projects: projects, err: err}
+	}
+}
+
 func (m Model) switchCmd(pane tmux.Pane) tea.Cmd {
 	return func() tea.Msg {
 		return switchMsg{err: m.tmux.SelectPane(context.Background(), pane)}
@@ -242,8 +318,23 @@ func (m Model) renderTop() string {
 	)
 }
 
+func (m Model) renderProjectTop() string {
+	subtitle := "choose a project with council-out"
+	if len(m.opts.ProjectRoots) > 0 {
+		subtitle = "scan " + strings.Join(m.opts.ProjectRoots, ", ")
+	}
+	return titleBar.Width(m.width).Render(
+		lipgloss.JoinHorizontal(
+			lipgloss.Center,
+			titleStyle.Render("council-ui"),
+			" ",
+			subtleStyle.Render(subtitle),
+		),
+	)
+}
+
 func (m Model) renderBottom() string {
-	mode := "j/k move  tab panes  enter switch  / filter  q quit"
+	mode := "j/k move  tab panes  enter switch  / filter  P projects  q quit"
 	if m.filtering {
 		mode = "filter: " + m.filter + "  enter apply  esc close  ctrl+u clear"
 	} else if m.filter != "" {
@@ -256,6 +347,42 @@ func (m Model) renderBottom() string {
 		mode += "  " + m.err.Error()
 	}
 	return footer.Width(m.width).Render(mode)
+}
+
+func (m Model) renderProjectPicker(width, height int) string {
+	var lines []string
+	lines = append(lines, sectionTitle.Render("Projects"))
+	lines = append(lines, subtleStyle.Render("Select the workspace whose council-out should be loaded."))
+	lines = append(lines, "")
+
+	if m.projectErr != nil {
+		lines = append(lines, warnStyle.Render("Some scan paths could not be read: "+m.projectErr.Error()))
+		lines = append(lines, "")
+	}
+	if len(m.projects) == 0 {
+		lines = append(lines, emptyStyle.Render("No projects with council-out/runs found."))
+		lines = append(lines, "")
+		lines = append(lines, "Run from a parent directory, or pass:")
+		lines = append(lines, mutedStyle.Render("  council-ui --projects-root /path/to/repos"))
+		lines = append(lines, mutedStyle.Render("  council-ui --workspace /path/to/project"))
+		lines = append(lines, mutedStyle.Render("  council-ui --home /path/to/project/council-out"))
+		return strings.Join(fitLines(lines, height-1), "\n")
+	}
+
+	for i, project := range m.projects {
+		prefix := "  "
+		style := listItemStyle
+		if i == m.selectedProject {
+			prefix = "▸ "
+			style = selectedItemStyle
+		}
+		title := fmt.Sprintf("%s%s  %d runs  %s", prefix, project.Name, project.Runs, project.UpdatedAt.Format("2006-01-02 15:04"))
+		lines = append(lines, style.Width(width-4).Render(truncate(title, width-6)))
+		lines = append(lines, mutedStyle.Render("    "+truncate(project.Workspace, width-8)))
+		lines = append(lines, "")
+	}
+
+	return strings.Join(fitLines(lines, height-1), "\n")
 }
 
 func (m Model) renderRunList(width, height int) string {
@@ -587,6 +714,8 @@ var (
 		Border(lipgloss.NormalBorder(), false, true, false, false).
 		BorderForeground(lipgloss.Color("238")).
 		Padding(1, 1)
+	projectBox = lipgloss.NewStyle().
+			Padding(2, 4)
 	detailBox = lipgloss.NewStyle().
 			Padding(1, 1)
 	previewBox = lipgloss.NewStyle().

@@ -15,6 +15,8 @@ orchestrator. The main job is to answer:
 - One-keystroke switching into the selected live pane.
 - Clear distinction between durable run progress and live pane health.
 - Fast filtering across task text, run id, workspace, instance, and stage.
+- Startup should ask which project to inspect instead of assuming the current
+  repo is the council workspace.
 - Pane previews that are useful but never treated as source of truth.
 
 ## Near-Term Improvements

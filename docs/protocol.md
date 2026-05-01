@@ -11,6 +11,10 @@ The durable protocol is a run directory:
 council-out/runs/<run-id>/
 ```
 
+At startup, `council-ui` discovers projects by scanning candidate workspace
+directories for that `council-out/runs` shape. Passing `--home` or
+`--workspace` bypasses discovery.
+
 Required identity files:
 
 - `task.txt`: original task text
