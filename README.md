@@ -85,6 +85,7 @@ Dashboard:
 - `h` / `l`: move through Plan, Execution, Reviews, and Progress sections
 - `Space`: expand or collapse the selected section
 - `Tab`: cycle codex, cc, amp, orchestrator pane preview
+- `o`: open the selected artifact in a modal viewer
 - `Ctrl+D` / `Ctrl+U`: scroll artifact preview down or up
 - `PageDown` / `PageUp`: scroll artifact preview down or up
 - `Enter`: switch tmux focus to the selected live pane
@@ -92,6 +93,16 @@ Dashboard:
 - `P`: return to project picker
 - `r`: refresh immediately
 - `q`: quit
+
+Artifact modal:
+
+- `j` / `k`: scroll line by line
+- `Ctrl+D` / `Ctrl+U`: scroll by half a screen
+- `PageDown` / `PageUp`: scroll by half a screen
+- `g` / `G`: jump to top or bottom
+- `h` / `l`: switch artifact section
+- `Tab` / `Shift+Tab`: switch artifact agent
+- `Esc`, `q`, or `o`: close the modal
 
 ## Protocol Boundary
 

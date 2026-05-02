@@ -1,9 +1,12 @@
 package ui
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/XiaoConstantine/council-ui/internal/protocol"
 )
@@ -115,5 +118,57 @@ func TestRenderSectionTabsIncludesVisibleLabels(t *testing.T) {
 		if !strings.Contains(tabs, label) {
 			t.Fatalf("tabs %q missing %q", tabs, label)
 		}
+	}
+}
+
+func TestSelectedArtifactReadsMeaningfulLines(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "implementation"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "implementation", "codex.md")
+	if err := os.WriteFile(path, []byte("\n# Title\n\n\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	model := New(Options{Home: "/tmp"})
+	model.selectedSection = 1
+	doc := model.selectedArtifact(protocol.Run{
+		Dir: dir,
+		Artifacts: protocol.Artifacts{
+			Implementation: true,
+		},
+	})
+
+	if doc.Err != nil {
+		t.Fatalf("doc err = %v", doc.Err)
+	}
+	if doc.Path != path || doc.Label != "implementation/codex.md" {
+		t.Fatalf("path=%q label=%q", doc.Path, doc.Label)
+	}
+	want := []string{"# Title", "", "body"}
+	if strings.Join(doc.Lines, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("lines=%#v", doc.Lines)
+	}
+}
+
+func TestArtifactModalScrollsAndCopiesOffsetOnClose(t *testing.T) {
+	model := New(Options{Home: "/tmp"})
+	model.artifactModal = true
+	model.height = 30
+
+	next, _ := model.updateArtifactModal(tea.KeyMsg{Type: tea.KeyCtrlD})
+	updated := next.(Model)
+	if updated.modalScroll != 15 {
+		t.Fatalf("modalScroll after ctrl+d = %d", updated.modalScroll)
+	}
+
+	next, _ = updated.updateArtifactModal(tea.KeyMsg{Type: tea.KeyEsc})
+	closed := next.(Model)
+	if closed.artifactModal {
+		t.Fatal("modal remained open")
+	}
+	if closed.artifactScroll != 15 {
+		t.Fatalf("artifactScroll after close = %d", closed.artifactScroll)
 	}
 }

@@ -36,6 +36,8 @@ type Model struct {
 	selectedAgent   int
 	selectedSection int
 	artifactScroll  int
+	artifactModal   bool
+	modalScroll     int
 	expanded        map[string]bool
 	width           int
 	height          int
@@ -141,6 +143,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.choosingProject {
 			return m.updateProjectPicker(msg)
 		}
+		if m.artifactModal {
+			return m.updateArtifactModal(msg)
+		}
 		if m.filtering {
 			return m.updateFilter(msg)
 		}
@@ -189,6 +194,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "end":
 			m.artifactScroll = 1 << 30
+			return m, nil
+		case "o":
+			m.artifactModal = true
+			m.modalScroll = m.artifactScroll
 			return m, nil
 		case " ":
 			section := sectionOrder[m.selectedSection]
@@ -246,6 +255,42 @@ func (m Model) updateProjectPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateArtifactModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q", "o":
+		m.artifactModal = false
+		m.artifactScroll = m.modalScroll
+	case "j", "down":
+		m.modalScroll++
+	case "k", "up":
+		m.modalScroll = max(0, m.modalScroll-1)
+	case "pgdown", "ctrl+d":
+		m.modalScroll += max(8, m.height/2)
+	case "pgup", "ctrl+u":
+		m.modalScroll = max(0, m.modalScroll-max(8, m.height/2))
+	case "home", "g":
+		m.modalScroll = 0
+	case "end", "G":
+		m.modalScroll = 1 << 30
+	case "right", "l":
+		m.selectedSection = min(m.selectedSection+1, len(sectionOrder)-1)
+		m.modalScroll = 0
+	case "left", "h":
+		m.selectedSection = max(0, m.selectedSection-1)
+		m.modalScroll = 0
+	case "tab":
+		m.selectedAgent = (m.selectedAgent + 1) % len(agentOrder)
+		m.modalScroll = 0
+	case "shift+tab":
+		m.selectedAgent--
+		if m.selectedAgent < 0 {
+			m.selectedAgent = len(agentOrder) - 1
+		}
+		m.modalScroll = 0
+	}
+	return m, nil
+}
+
 func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
@@ -282,6 +327,9 @@ func (m Model) View() string {
 		bodyHeight := max(8, m.height-lipgloss.Height(top)-lipgloss.Height(bottom))
 		body := projectBox.Width(m.width).Height(bodyHeight).Render(m.renderProjectPicker(m.width, bodyHeight))
 		return lipgloss.JoinVertical(lipgloss.Left, top, body, bottom)
+	}
+	if m.artifactModal {
+		return m.renderArtifactModal(m.width, m.height)
 	}
 
 	top := m.renderTop()
@@ -388,7 +436,7 @@ func (m Model) renderProjectTop() string {
 }
 
 func (m Model) renderBottom() string {
-	mode := "j/k runs  h/l sections  space expand  tab agent  ctrl+d/u scroll  enter switch  / filter  P projects  q quit"
+	mode := "j/k runs  h/l sections  space expand  tab agent  o open artifact  ctrl+d/u scroll  enter switch  / filter  P projects  q quit"
 	if m.filtering {
 		mode = "filter: " + m.filter + "  enter apply  esc close  ctrl+u clear"
 	} else if m.filter != "" {
@@ -687,34 +735,70 @@ func (m Model) renderArtifactPreview(lines []string, width, height int) string {
 		return strings.Join(fitLines(lines, height-1), "\n")
 	}
 
-	path, label := m.artifactPreviewPath(run)
+	doc := m.selectedArtifact(run)
 	lines[0] = sectionTitle.Render("Artifact")
 	lines = append(lines, m.renderSectionTabs(width))
 	lines = append(lines, m.renderAgentTabs(width))
-	lines = append(lines, mutedStyle.Render("h/l section  tab agent  ctrl+d/u scroll"))
+	lines = append(lines, mutedStyle.Render("o open popup  h/l section  tab agent  ctrl+d/u scroll"))
 	lines = append(lines, "")
-	if path == "" {
+	if doc.Path == "" {
 		lines = append(lines, emptyStyle.Render("No live pane and no artifact for this tab."))
 		return strings.Join(fitLines(lines, height-1), "\n")
 	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		lines = append(lines, emptyStyle.Render("No live pane. Could not read "+label+"."))
+	if doc.Err != nil {
+		lines = append(lines, emptyStyle.Render("No live pane. Could not read "+doc.Label+"."))
 		return strings.Join(fitLines(lines, height-1), "\n")
 	}
 
-	lines = append(lines, strongStyle.Render(label))
-	lines = append(lines, mutedStyle.Render(shortPath(path)))
+	lines = append(lines, strongStyle.Render(doc.Label))
+	lines = append(lines, mutedStyle.Render(shortPath(doc.Path)))
 	lines = append(lines, "")
 	visibleHeight := max(3, height-len(lines)-1)
-	content := meaningfulLines(string(data))
-	view, scroll, total := scrollLines(content, m.artifactScroll, visibleHeight)
+	view, scroll, total := scrollLines(doc.Lines, m.artifactScroll, visibleHeight)
 	lines = append(lines, mutedStyle.Render(fmt.Sprintf("lines %d-%d of %d", min(scroll+1, total), min(scroll+len(view), total), total)))
 	for _, line := range view {
 		lines = append(lines, truncate(line, width-4))
 	}
 	return strings.Join(fitLines(lines, height-1), "\n")
+}
+
+func (m Model) renderArtifactModal(width, height int) string {
+	run, ok := m.selectedRunSnapshot()
+	if !ok {
+		return centerBox(width, height, modalBox.Width(max(20, width-4)).Height(max(8, height-3)).Render(emptyStyle.Render("No run selected.")))
+	}
+	doc := m.selectedArtifact(run)
+	modalWidth := clamp(width-8, min(44, width), max(20, width-2))
+	modalHeight := clamp(height-4, min(16, height), max(8, height-2))
+	contentHeight := max(3, modalHeight-10)
+
+	var lines []string
+	title := fmt.Sprintf("Artifact · %s · %s · %s", sectionLabel(sectionOrder[m.selectedSection]), agentTabLabel(agentOrder[m.selectedAgent]), run.ID)
+	lines = append(lines, titleStyle.Render(truncate(title, modalWidth-6)))
+	lines = append(lines, m.renderSectionTabs(modalWidth-4))
+	lines = append(lines, m.renderAgentTabs(modalWidth-4))
+	lines = append(lines, mutedStyle.Render("esc/q close  h/l section  tab agent  j/k or ctrl+d/u scroll  g/G top/bottom"))
+	lines = append(lines, "")
+
+	if doc.Path == "" {
+		lines = append(lines, emptyStyle.Render("No artifact for this section and agent."))
+		return centerBox(width, height, modalBox.Width(modalWidth).Height(modalHeight).Render(strings.Join(lines, "\n")))
+	}
+	if doc.Err != nil {
+		lines = append(lines, warnStyle.Render("Could not read "+doc.Label+": "+doc.Err.Error()))
+		return centerBox(width, height, modalBox.Width(modalWidth).Height(modalHeight).Render(strings.Join(lines, "\n")))
+	}
+
+	lines = append(lines, strongStyle.Render(doc.Label))
+	lines = append(lines, mutedStyle.Render(doc.Path))
+	lines = append(lines, "")
+	view, scroll, total := scrollLines(doc.Lines, m.modalScroll, contentHeight)
+	lines = append(lines, mutedStyle.Render(fmt.Sprintf("lines %d-%d of %d", min(scroll+1, total), min(scroll+len(view), total), total)))
+	for _, line := range view {
+		lines = append(lines, truncate(line, modalWidth-6))
+	}
+
+	return centerBox(width, height, modalBox.Width(modalWidth).Height(modalHeight).Render(strings.Join(lines, "\n")))
 }
 
 func artifactPreviewPath(run protocol.Run, role string) (path string, label string) {
@@ -756,6 +840,29 @@ func artifactPreviewPath(run protocol.Run, role string) (path string, label stri
 		}
 	}
 	return "", ""
+}
+
+type artifactDocument struct {
+	Path  string
+	Label string
+	Lines []string
+	Err   error
+}
+
+func (m Model) selectedArtifact(run protocol.Run) artifactDocument {
+	path, label := m.artifactPreviewPath(run)
+	if path == "" {
+		return artifactDocument{}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return artifactDocument{Path: path, Label: label, Err: err}
+	}
+	return artifactDocument{
+		Path:  path,
+		Label: label,
+		Lines: meaningfulLines(string(data)),
+	}
 }
 
 func (m Model) artifactPreviewPath(run protocol.Run) (path string, label string) {
@@ -1026,6 +1133,10 @@ func scrollLines(lines []string, offset int, height int) ([]string, int, int) {
 	return lines[offset:end], offset, total
 }
 
+func centerBox(width, height int, content string) string {
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, content, lipgloss.WithWhitespaceChars(" "))
+}
+
 func stripControlNoise(value string) string {
 	return strings.ReplaceAll(value, "\x1b[?25h", "")
 }
@@ -1124,6 +1235,11 @@ var (
 			Border(lipgloss.NormalBorder(), true, false, false, false).
 			BorderForeground(lipgloss.Color("238")).
 			Padding(1, 1)
+	modalBox = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("81")).
+			Background(lipgloss.Color("235")).
+			Padding(1, 2)
 	listItemStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("252"))
 	selectedItemStyle = lipgloss.NewStyle().
