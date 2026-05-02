@@ -27,6 +27,17 @@ From a local checkout:
 go build ./cmd/council-ui
 ```
 
+The default build uses a plain preview renderer so the UI works without native
+terminal-emulation libraries. To use `go-libghostty`, install/build
+`libghostty-vt`, set `PKG_CONFIG_PATH`, then build with:
+
+```bash
+go build -tags libghostty ./cmd/council-ui
+```
+
+The pane header shows the active renderer, for example `renderer: plain` or
+`renderer: go-libghostty`.
+
 ## Run
 
 Run without flags to choose a project interactively. The picker scans the
@@ -108,7 +119,7 @@ producers.
 
 ## Direction
 
-The next layer should add an `internal/termview` adapter backed by
-`go-libghostty` for higher-fidelity pane rendering. Keeping that behind an
-adapter matters because `go-libghostty` is cgo-based and the Go API is still
-settling.
+Pane rendering goes through `internal/termview`. The default renderer is plain
+text; `-tags libghostty` enables the `go-libghostty` adapter for real
+`libghostty-vt` terminal interpretation. Keeping that behind an adapter matters
+because `go-libghostty` is cgo-based and the Go API is still settling.

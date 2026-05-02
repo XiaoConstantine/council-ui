@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/XiaoConstantine/council-ui/internal/protocol"
+	"github.com/XiaoConstantine/council-ui/internal/termview"
 	"github.com/XiaoConstantine/council-ui/internal/tmux"
 )
 
@@ -38,6 +39,8 @@ type Model struct {
 	filter          string
 	filtering       bool
 	preview         string
+	renderer        string
+	previewErr      error
 	err             error
 	projectErr      error
 	tmuxErr         error
@@ -51,13 +54,15 @@ type projectsMsg struct {
 }
 
 type refreshMsg struct {
-	runs     []protocol.Run
-	councils []tmux.Council
-	panes    []tmux.Pane
-	preview  string
-	err      error
-	tmuxErr  error
-	loadedAt time.Time
+	runs       []protocol.Run
+	councils   []tmux.Council
+	panes      []tmux.Pane
+	preview    string
+	renderer   string
+	previewErr error
+	err        error
+	tmuxErr    error
+	loadedAt   time.Time
 }
 
 type switchMsg struct {
@@ -108,6 +113,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.councils = msg.councils
 		m.panes = msg.panes
 		m.preview = msg.preview
+		m.renderer = msg.renderer
+		m.previewErr = msg.previewErr
 		m.err = msg.err
 		m.tmuxErr = msg.tmuxErr
 		m.loadedAt = msg.loadedAt
@@ -267,21 +274,29 @@ func (m Model) refreshCmd() tea.Cmd {
 		next.councils = councils
 		next.panes = panes
 		preview := ""
+		renderer := ""
+		var previewErr error
 		if pane, ok := next.selectedPane(); ok {
 			capture, captureErr := client.CapturePane(context.Background(), pane.ID, 120)
 			if captureErr == nil {
-				preview = capture
+				cols := max(20, next.width/2)
+				rows := max(12, next.height/2)
+				preview, renderer, previewErr = termview.Render(capture, cols, rows)
+			} else {
+				previewErr = captureErr
 			}
 		}
 
 		return refreshMsg{
-			runs:     runs,
-			councils: councils,
-			panes:    panes,
-			preview:  preview,
-			err:      err,
-			tmuxErr:  tmuxErr,
-			loadedAt: time.Now(),
+			runs:       runs,
+			councils:   councils,
+			panes:      panes,
+			preview:    preview,
+			renderer:   renderer,
+			previewErr: previewErr,
+			err:        err,
+			tmuxErr:    tmuxErr,
+			loadedAt:   time.Now(),
 		}
 	}
 }
@@ -485,9 +500,12 @@ func (m Model) renderArtifactSummary(run protocol.Run, width int) []string {
 	}
 
 	return []string{
-		sectionTitle.Render("Artifacts"),
-		truncate(fmt.Sprintf("%s final plan   %s implementation", mark(run.Artifacts.FinalPlan), mark(run.Artifacts.Implementation)), width-4),
-		truncate(fmt.Sprintf("%s reviews %s", mark(reviewStatus != "pending"), reviewStatus), width-4),
+		truncate(fmt.Sprintf("%s  %s final plan   %s implementation",
+			sectionTitle.Render("Artifacts"),
+			plainMark(run.Artifacts.FinalPlan),
+			plainMark(run.Artifacts.Implementation),
+		), width-4),
+		truncate(fmt.Sprintf("           %s reviews %s", plainMark(reviewStatus != "pending"), reviewStatus), width-4),
 	}
 }
 
@@ -495,7 +513,8 @@ func (m Model) renderPreview(width, height int) string {
 	pane, ok := m.selectedPane()
 	header := sectionTitle.Render("Pane")
 	if ok {
-		header = sectionTitle.Render(fmt.Sprintf("Pane %s · %s · %s", pane.ID, pane.Role, pane.Command))
+		renderer := fallback(m.renderer, "plain")
+		header = sectionTitle.Render(fmt.Sprintf("Pane %s · %s · %s · renderer: %s", pane.ID, pane.Role, pane.Command, renderer))
 	}
 
 	var lines []string
@@ -505,6 +524,10 @@ func (m Model) renderPreview(width, height int) string {
 		return m.renderArtifactPreview(lines, width, height)
 	}
 	lines = append(lines, "")
+	if m.previewErr != nil {
+		lines = append(lines, warnStyle.Render("Preview renderer error: "+m.previewErr.Error()))
+		lines = append(lines, "")
+	}
 	if strings.TrimSpace(m.preview) == "" {
 		lines = append(lines, emptyStyle.Render("Pane preview is empty."))
 		return strings.Join(fitLines(lines, height-1), "\n")
@@ -608,7 +631,7 @@ func (m Model) renderAgentTabs(width int) string {
 		}
 		parts = append(parts, style.Render(agentTabLabel(role)))
 	}
-	return truncate(strings.Join(parts, " "), width-4)
+	return strings.Join(parts, " ")
 }
 
 func (m Model) selectedRunSnapshot() (protocol.Run, bool) {
@@ -689,6 +712,13 @@ func mark(done bool) string {
 		return okStyle.Render("●")
 	}
 	return mutedStyle.Render("○")
+}
+
+func plainMark(done bool) string {
+	if done {
+		return "●"
+	}
+	return "○"
 }
 
 func countDone(values map[string]bool) int {
