@@ -23,6 +23,13 @@ orchestrator. The main job is to answer:
 
 ## Near-Term Improvements
 
+- Use the comparable-tools research in `docs/comparable-tools.md` to guide UI
+  priorities.
+- Show run-list timestamps and sort mode, with toggles for updated time, status,
+  workspace, and active panes.
+- Add contextual `?` help and an action palette for discoverability.
+- Expand the artifact modal into an artifact browser with search, file picker,
+  copy path, and open-in-editor actions.
 - Add actions for `council resume <run-id>` and `council exec <run-id>`.
 - Add confirmation flow for disruptive actions like reset.
 - Improve live pane preview cleanup and truncation.
