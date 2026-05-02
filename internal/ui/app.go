@@ -702,7 +702,7 @@ func (m Model) renderPreview(width, height int) string {
 	lines = append(lines, header)
 	lines = append(lines, m.renderAgentTabs(width))
 	if !ok {
-		return m.renderArtifactPreview(lines, width, height)
+		return m.renderArtifactPreview(width, height)
 	}
 	lines = append(lines, "")
 	if m.previewErr != nil {
@@ -719,15 +719,15 @@ func (m Model) renderPreview(width, height int) string {
 	return strings.Join(fitLines(lines, height-1), "\n")
 }
 
-func (m Model) renderArtifactPreview(lines []string, width, height int) string {
+func (m Model) renderArtifactPreview(width, height int) string {
 	run, ok := m.selectedRunSnapshot()
+	lines := []string{sectionTitle.Render("Artifact")}
 	if !ok {
 		lines = append(lines, "", emptyStyle.Render("No run selected."))
 		return strings.Join(fitLines(lines, height-1), "\n")
 	}
 
 	doc := m.selectedArtifact(run)
-	lines[0] = sectionTitle.Render("Artifact")
 	lines = append(lines, m.renderSectionTabs(width))
 	lines = append(lines, m.renderAgentTabs(width))
 	lines = append(lines, mutedStyle.Render("o open popup  h/l section  tab agent  ctrl+d/u scroll"))

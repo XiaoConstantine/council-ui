@@ -121,6 +121,16 @@ func TestRenderSectionTabsIncludesVisibleLabels(t *testing.T) {
 	}
 }
 
+func TestArtifactFallbackDoesNotDuplicateAgentTabs(t *testing.T) {
+	model := New(Options{Home: "/tmp"})
+	model.runs = []protocol.Run{{ID: "run-1", Dir: "/tmp/run-1"}}
+
+	view := model.renderPreview(120, 20)
+	if got := strings.Count(view, "agent"); got != 2 {
+		t.Fatalf("agent label count = %d, want 2\n%s", got, view)
+	}
+}
+
 func TestSelectedArtifactReadsMeaningfulLines(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "implementation"), 0o755); err != nil {
