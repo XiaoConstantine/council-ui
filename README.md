@@ -82,6 +82,8 @@ Project picker:
 Dashboard:
 
 - `j` / `k`: move through runs
+- `h` / `l`: move through Plan, Execution, Reviews, and Progress sections
+- `Space`: expand or collapse the selected section
 - `Tab`: cycle codex, cc, amp, orchestrator pane preview
 - `Enter`: switch tmux focus to the selected live pane
 - `/`: filter by run id, task, workspace, instance, phase, or stage

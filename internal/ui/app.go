@@ -34,6 +34,8 @@ type Model struct {
 	panes           []tmux.Pane
 	selectedRun     int
 	selectedAgent   int
+	selectedSection int
+	expanded        map[string]bool
 	width           int
 	height          int
 	filter          string
@@ -80,6 +82,11 @@ func New(opts Options) Model {
 		tmux:            tmux.Client{},
 		choosingProject: opts.Home == "",
 		selectedAgent:   0,
+		expanded: map[string]bool{
+			"plan":      true,
+			"execution": true,
+			"reviews":   true,
+		},
 	}
 }
 
@@ -158,6 +165,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectedAgent = len(agentOrder) - 1
 			}
 			return m, m.refreshCmd()
+		case "right", "l":
+			m.selectedSection = min(m.selectedSection+1, len(sectionOrder)-1)
+			return m, nil
+		case "left", "h":
+			m.selectedSection = max(0, m.selectedSection-1)
+			return m, nil
+		case " ":
+			section := sectionOrder[m.selectedSection]
+			m.expanded[section] = !m.expanded[section]
+			return m, nil
 		case "enter":
 			pane, ok := m.selectedPane()
 			if !ok {
@@ -350,7 +367,7 @@ func (m Model) renderProjectTop() string {
 }
 
 func (m Model) renderBottom() string {
-	mode := "j/k move  tab panes  enter switch  / filter  P projects  q quit"
+	mode := "j/k runs  h/l sections  space expand  tab panes  enter switch  / filter  P projects  q quit"
 	if m.filtering {
 		mode = "filter: " + m.filter + "  enter apply  esc close  ctrl+u clear"
 	} else if m.filter != "" {
@@ -449,6 +466,8 @@ func (m Model) renderDetail(width, height int) string {
 	lines = append(lines, m.renderPipeline(run, width)...)
 	lines = append(lines, "")
 	lines = append(lines, m.renderArtifactSummary(run, width)...)
+	lines = append(lines, "")
+	lines = append(lines, m.renderSections(run, width)...)
 	if len(run.Missing) > 0 {
 		lines = append(lines, "")
 		lines = append(lines, sectionTitle.Render("Waiting On"))
@@ -509,6 +528,108 @@ func (m Model) renderArtifactSummary(run protocol.Run, width int) []string {
 	}
 }
 
+func (m Model) renderSections(run protocol.Run, width int) []string {
+	lines := []string{sectionTitle.Render("Sections")}
+	for i, section := range sectionOrder {
+		style := sectionRowStyle
+		cursor := "  "
+		if i == m.selectedSection {
+			style = selectedSectionStyle
+			cursor = "▸ "
+		}
+		icon := "▸"
+		if m.expanded[section] {
+			icon = "▾"
+		}
+		line := fmt.Sprintf("%s%s %s  %s", cursor, icon, sectionLabel(section), sectionStatus(run, section))
+		lines = append(lines, style.Width(width-4).Render(truncate(line, width-6)))
+		if m.expanded[section] {
+			lines = append(lines, sectionChildren(run, section, width)...)
+		}
+	}
+	return lines
+}
+
+func sectionChildren(run protocol.Run, section string, width int) []string {
+	var rows []string
+	switch section {
+	case "plan":
+		for _, row := range []struct {
+			label string
+			done  bool
+		}{
+			{"codex plan", run.Artifacts.Plans["codex"]},
+			{"cc plan", run.Artifacts.Plans["cc"]},
+			{"amp plan", run.Artifacts.Plans["amp"]},
+			{"codex critique", run.Artifacts.Critiques["codex"]},
+			{"cc critique", run.Artifacts.Critiques["cc"]},
+			{"amp critique", run.Artifacts.Critiques["amp"]},
+			{"final plan", run.Artifacts.FinalPlan},
+		} {
+			rows = append(rows, mutedStyle.Render(truncate(fmt.Sprintf("     %s %s", plainMark(row.done), row.label), width-8)))
+		}
+	case "execution":
+		rows = append(rows, mutedStyle.Render(truncate(fmt.Sprintf("     %s implementation", plainMark(run.Artifacts.Implementation)), width-8)))
+		if len(run.Artifacts.RevisionRounds) > 0 {
+			for _, round := range run.Artifacts.RevisionRounds {
+				rows = append(rows, mutedStyle.Render(truncate(fmt.Sprintf("     ● revise round %d", round), width-8)))
+			}
+		}
+	case "reviews":
+		if len(run.Artifacts.ReviewRounds) == 0 {
+			rows = append(rows, mutedStyle.Render("     ○ no review rounds"))
+			break
+		}
+		for _, round := range run.Artifacts.ReviewRounds {
+			if !round.CC && !round.AMP {
+				continue
+			}
+			rows = append(rows, mutedStyle.Render(truncate(fmt.Sprintf("     round %d  cc=%s  amp=%s", round.Round, plainMark(round.CC), plainMark(round.AMP)), width-8)))
+		}
+		if run.Verdicts.CC != "" || run.Verdicts.AMP != "" {
+			rows = append(rows, mutedStyle.Render(truncate(fmt.Sprintf("     verdicts  cc=%s  amp=%s", fallback(run.Verdicts.CC, "-"), fallback(run.Verdicts.AMP, "-")), width-8)))
+		}
+	case "progress":
+		start := max(0, len(run.Progress)-4)
+		if len(run.Progress) == 0 {
+			rows = append(rows, mutedStyle.Render("     no progress log"))
+			break
+		}
+		for _, event := range run.Progress[start:] {
+			rows = append(rows, mutedStyle.Render(truncate(fmt.Sprintf("     %s  %s", event.Time, event.Stage), width-8)))
+		}
+	}
+	return rows
+}
+
+func sectionStatus(run protocol.Run, section string) string {
+	switch section {
+	case "plan":
+		return fmt.Sprintf("%d/3 plans, %d/3 critiques, final %s",
+			countDone(run.Artifacts.Plans),
+			countDone(run.Artifacts.Critiques),
+			yesNo(run.Artifacts.FinalPlan),
+		)
+	case "execution":
+		if run.Artifacts.Implementation {
+			return "implementation complete"
+		}
+		return "implementation pending"
+	case "reviews":
+		if run.Verdicts.CC != "" || run.Verdicts.AMP != "" {
+			return fmt.Sprintf("cc=%s amp=%s", fallback(run.Verdicts.CC, "-"), fallback(run.Verdicts.AMP, "-"))
+		}
+		return "pending"
+	case "progress":
+		if len(run.Progress) == 0 {
+			return "no events"
+		}
+		return run.Progress[len(run.Progress)-1].Stage
+	default:
+		return ""
+	}
+}
+
 func (m Model) renderPreview(width, height int) string {
 	pane, ok := m.selectedPane()
 	header := sectionTitle.Render("Pane")
@@ -545,7 +666,7 @@ func (m Model) renderArtifactPreview(lines []string, width, height int) string {
 		return strings.Join(fitLines(lines, height-1), "\n")
 	}
 
-	path, label := artifactPreviewPath(run, agentOrder[m.selectedAgent])
+	path, label := m.artifactPreviewPath(run)
 	lines[0] = sectionTitle.Render("Artifact")
 	lines = append(lines, "")
 	if path == "" {
@@ -607,6 +728,41 @@ func artifactPreviewPath(run protocol.Run, role string) (path string, label stri
 		}
 	}
 	return "", ""
+}
+
+func (m Model) artifactPreviewPath(run protocol.Run) (path string, label string) {
+	section := sectionOrder[m.selectedSection]
+	switch section {
+	case "plan":
+		if run.Artifacts.FinalPlan {
+			return filepath.Join(run.Dir, "plan.final.md"), "plan.final.md"
+		}
+		if run.Artifacts.Critiques["codex"] {
+			return filepath.Join(run.Dir, "critiques", "codex.md"), "critiques/codex.md"
+		}
+		return artifactPreviewPath(run, agentOrder[m.selectedAgent])
+	case "execution":
+		if run.Artifacts.Implementation {
+			return filepath.Join(run.Dir, "implementation", "codex.md"), "implementation/codex.md"
+		}
+		return filepath.Join(run.Dir, "plan.final.md"), "plan.final.md"
+	case "reviews":
+		if reviewPath := latestReviewPath(run, agentOrder[m.selectedAgent]); reviewPath != "" {
+			return reviewPath, strings.TrimPrefix(reviewPath, run.Dir+"/")
+		}
+		if reviewPath := latestReviewPath(run, "cc"); reviewPath != "" {
+			return reviewPath, strings.TrimPrefix(reviewPath, run.Dir+"/")
+		}
+		if reviewPath := latestReviewPath(run, "amp"); reviewPath != "" {
+			return reviewPath, strings.TrimPrefix(reviewPath, run.Dir+"/")
+		}
+	case "progress":
+		progress := filepath.Join(run.Dir, "progress.log")
+		if fileExists(progress) {
+			return progress, "progress.log"
+		}
+	}
+	return artifactPreviewPath(run, agentOrder[m.selectedAgent])
 }
 
 func latestReviewPath(run protocol.Run, role string) string {
@@ -847,12 +1003,35 @@ func min(a, b int) int {
 }
 
 var agentOrder = []string{"codex", "cc", "amp", "orchestrator"}
+var sectionOrder = []string{"plan", "execution", "reviews", "progress"}
 
 func agentTabLabel(role string) string {
 	if role == "orchestrator" {
 		return "orch"
 	}
 	return role
+}
+
+func sectionLabel(section string) string {
+	switch section {
+	case "plan":
+		return "Plan"
+	case "execution":
+		return "Execution"
+	case "reviews":
+		return "Reviews"
+	case "progress":
+		return "Progress"
+	default:
+		return section
+	}
+}
+
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
 }
 
 var (
@@ -893,6 +1072,12 @@ var (
 				Bold(true).
 				Foreground(lipgloss.Color("230")).
 				Background(lipgloss.Color("238"))
+	sectionRowStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252"))
+	selectedSectionStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("24"))
 	okStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("42")).
 		Bold(true)

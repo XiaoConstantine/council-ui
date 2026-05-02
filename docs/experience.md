@@ -17,6 +17,8 @@ orchestrator. The main job is to answer:
 - Fast filtering across task text, run id, workspace, instance, and stage.
 - Startup should ask which project to inspect instead of assuming the current
   repo is the council workspace.
+- Plan, execution, reviews, and progress should be expandable sections so
+  historical runs remain inspectable without live panes.
 - Pane previews that are useful but never treated as source of truth.
 
 ## Near-Term Improvements
