@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/XiaoConstantine/council-ui/internal/protocol"
-	"github.com/XiaoConstantine/council-ui/internal/termview"
 	"github.com/XiaoConstantine/council-ui/internal/tmux"
 )
 
@@ -44,7 +43,6 @@ type Model struct {
 	filter          string
 	filtering       bool
 	preview         string
-	renderer        string
 	previewErr      error
 	err             error
 	projectErr      error
@@ -63,7 +61,6 @@ type refreshMsg struct {
 	councils   []tmux.Council
 	panes      []tmux.Pane
 	preview    string
-	renderer   string
 	previewErr error
 	err        error
 	tmuxErr    error
@@ -123,7 +120,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.councils = msg.councils
 		m.panes = msg.panes
 		m.preview = msg.preview
-		m.renderer = msg.renderer
 		m.previewErr = msg.previewErr
 		m.err = msg.err
 		m.tmuxErr = msg.tmuxErr
@@ -360,14 +356,11 @@ func (m Model) refreshCmd() tea.Cmd {
 		next.councils = councils
 		next.panes = panes
 		preview := ""
-		renderer := ""
 		var previewErr error
 		if pane, ok := next.selectedPane(); ok {
 			capture, captureErr := client.CapturePane(context.Background(), pane.ID, 120)
 			if captureErr == nil {
-				cols := max(20, next.width/2)
-				rows := max(12, next.height/2)
-				preview, renderer, previewErr = termview.Render(capture, cols, rows)
+				preview = capture
 			} else {
 				previewErr = captureErr
 			}
@@ -378,7 +371,6 @@ func (m Model) refreshCmd() tea.Cmd {
 			councils:   councils,
 			panes:      panes,
 			preview:    preview,
-			renderer:   renderer,
 			previewErr: previewErr,
 			err:        err,
 			tmuxErr:    tmuxErr,
@@ -703,8 +695,7 @@ func (m Model) renderPreview(width, height int) string {
 	pane, ok := m.selectedPane()
 	header := sectionTitle.Render("Pane")
 	if ok {
-		renderer := fallback(m.renderer, "plain")
-		header = sectionTitle.Render(fmt.Sprintf("Pane %s · %s · %s · renderer: %s", pane.ID, pane.Role, pane.Command, renderer))
+		header = sectionTitle.Render(fmt.Sprintf("Pane %s · %s · %s", pane.ID, pane.Role, pane.Command))
 	}
 
 	var lines []string
@@ -715,7 +706,7 @@ func (m Model) renderPreview(width, height int) string {
 	}
 	lines = append(lines, "")
 	if m.previewErr != nil {
-		lines = append(lines, warnStyle.Render("Preview renderer error: "+m.previewErr.Error()))
+		lines = append(lines, warnStyle.Render("Pane preview error: "+m.previewErr.Error()))
 		lines = append(lines, "")
 	}
 	if strings.TrimSpace(m.preview) == "" {

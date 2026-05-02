@@ -1,11 +1,10 @@
 module github.com/XiaoConstantine/council-ui
 
-go 1.26.0
+go 1.24.0
 
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/mitchellh/go-libghostty v0.0.0-20260428141358-29fdb3130d7c
 )
 
 require (

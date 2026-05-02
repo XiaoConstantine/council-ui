@@ -25,6 +25,6 @@ orchestrator. The main job is to answer:
 
 - Add actions for `council resume <run-id>` and `council exec <run-id>`.
 - Add confirmation flow for disruptive actions like reset.
-- Add a richer pane preview renderer behind `internal/termview`.
+- Improve live pane preview cleanup and truncation.
 - Add structured `events.jsonl` support when `maestro-council` produces it.
 - Group runs by workspace and instance once there are enough active councils.
