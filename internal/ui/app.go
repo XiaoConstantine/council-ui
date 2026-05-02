@@ -35,6 +35,7 @@ type Model struct {
 	selectedRun     int
 	selectedAgent   int
 	selectedSection int
+	artifactScroll  int
 	expanded        map[string]bool
 	width           int
 	height          int
@@ -149,27 +150,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "j", "down":
 			if m.selectedRun < len(m.visibleRuns())-1 {
 				m.selectedRun++
+				m.artifactScroll = 0
 			}
 			return m, m.refreshCmd()
 		case "k", "up":
 			if m.selectedRun > 0 {
 				m.selectedRun--
+				m.artifactScroll = 0
 			}
 			return m, m.refreshCmd()
 		case "tab":
 			m.selectedAgent = (m.selectedAgent + 1) % len(agentOrder)
+			m.artifactScroll = 0
 			return m, m.refreshCmd()
 		case "shift+tab":
 			m.selectedAgent--
 			if m.selectedAgent < 0 {
 				m.selectedAgent = len(agentOrder) - 1
 			}
+			m.artifactScroll = 0
 			return m, m.refreshCmd()
 		case "right", "l":
 			m.selectedSection = min(m.selectedSection+1, len(sectionOrder)-1)
+			m.artifactScroll = 0
 			return m, nil
 		case "left", "h":
 			m.selectedSection = max(0, m.selectedSection-1)
+			m.artifactScroll = 0
+			return m, nil
+		case "pgdown", "ctrl+d":
+			m.artifactScroll += 10
+			return m, nil
+		case "pgup", "ctrl+u":
+			m.artifactScroll = max(0, m.artifactScroll-10)
+			return m, nil
+		case "home":
+			m.artifactScroll = 0
+			return m, nil
+		case "end":
+			m.artifactScroll = 1 << 30
 			return m, nil
 		case " ":
 			section := sectionOrder[m.selectedSection]
@@ -218,6 +237,7 @@ func (m Model) updateProjectPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.opts.Home = project.Home
 		m.choosingProject = false
 		m.selectedRun = 0
+		m.artifactScroll = 0
 		m.filter = ""
 		m.filtering = false
 		m.status = "loaded " + project.Name
@@ -233,6 +253,7 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		m.filtering = false
 		m.selectedRun = 0
+		m.artifactScroll = 0
 	case "backspace":
 		if len(m.filter) > 0 {
 			m.filter = m.filter[:len(m.filter)-1]
@@ -367,7 +388,7 @@ func (m Model) renderProjectTop() string {
 }
 
 func (m Model) renderBottom() string {
-	mode := "j/k runs  h/l sections  space expand  tab panes  enter switch  / filter  P projects  q quit"
+	mode := "j/k runs  h/l sections  space expand  tab agent  ctrl+d/u scroll  enter switch  / filter  P projects  q quit"
 	if m.filtering {
 		mode = "filter: " + m.filter + "  enter apply  esc close  ctrl+u clear"
 	} else if m.filter != "" {
@@ -668,6 +689,9 @@ func (m Model) renderArtifactPreview(lines []string, width, height int) string {
 
 	path, label := m.artifactPreviewPath(run)
 	lines[0] = sectionTitle.Render("Artifact")
+	lines = append(lines, m.renderSectionTabs(width))
+	lines = append(lines, m.renderAgentTabs(width))
+	lines = append(lines, mutedStyle.Render("h/l section  tab agent  ctrl+d/u scroll"))
 	lines = append(lines, "")
 	if path == "" {
 		lines = append(lines, emptyStyle.Render("No live pane and no artifact for this tab."))
@@ -683,7 +707,11 @@ func (m Model) renderArtifactPreview(lines []string, width, height int) string {
 	lines = append(lines, strongStyle.Render(label))
 	lines = append(lines, mutedStyle.Render(shortPath(path)))
 	lines = append(lines, "")
-	for _, line := range headMeaningfulLines(string(data), max(3, height-7)) {
+	visibleHeight := max(3, height-len(lines)-1)
+	content := meaningfulLines(string(data))
+	view, scroll, total := scrollLines(content, m.artifactScroll, visibleHeight)
+	lines = append(lines, mutedStyle.Render(fmt.Sprintf("lines %d-%d of %d", min(scroll+1, total), min(scroll+len(view), total), total)))
+	for _, line := range view {
 		lines = append(lines, truncate(line, width-4))
 	}
 	return strings.Join(fitLines(lines, height-1), "\n")
@@ -780,6 +808,7 @@ func latestReviewPath(run protocol.Run, role string) string {
 
 func (m Model) renderAgentTabs(width int) string {
 	var parts []string
+	parts = append(parts, mutedStyle.Render("agent"))
 	for i, role := range agentOrder {
 		style := tabStyle
 		if i == m.selectedAgent {
@@ -788,6 +817,19 @@ func (m Model) renderAgentTabs(width int) string {
 		parts = append(parts, style.Render(agentTabLabel(role)))
 	}
 	return strings.Join(parts, " ")
+}
+
+func (m Model) renderSectionTabs(width int) string {
+	var parts []string
+	parts = append(parts, mutedStyle.Render("section"))
+	for i, section := range sectionOrder {
+		style := tabStyle
+		if i == m.selectedSection {
+			style = activeTabStyle
+		}
+		parts = append(parts, style.Render(sectionLabel(section)))
+	}
+	return truncate(strings.Join(parts, " "), width-4)
 }
 
 func (m Model) selectedRunSnapshot() (protocol.Run, bool) {
@@ -946,8 +988,16 @@ func tailLines(value string, count int) []string {
 }
 
 func headMeaningfulLines(value string, count int) []string {
+	lines := meaningfulLines(value)
+	if len(lines) <= count {
+		return lines
+	}
+	return lines[:count]
+}
+
+func meaningfulLines(value string) []string {
 	raw := strings.Split(strings.TrimRight(value, "\n"), "\n")
-	lines := make([]string, 0, min(len(raw), count))
+	lines := make([]string, 0, len(raw))
 	blank := false
 	for _, line := range raw {
 		trimmed := strings.TrimSpace(line)
@@ -961,11 +1011,19 @@ func headMeaningfulLines(value string, count int) []string {
 			blank = false
 			lines = append(lines, line)
 		}
-		if len(lines) >= count {
-			break
-		}
 	}
 	return lines
+}
+
+func scrollLines(lines []string, offset int, height int) ([]string, int, int) {
+	total := len(lines)
+	if height <= 0 || total == 0 {
+		return nil, 0, total
+	}
+	maxOffset := max(0, total-height)
+	offset = clamp(offset, 0, maxOffset)
+	end := min(total, offset+height)
+	return lines[offset:end], offset, total
 }
 
 func stripControlNoise(value string) string {

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/XiaoConstantine/council-ui/internal/protocol"
@@ -91,6 +92,28 @@ func TestHeadMeaningfulLinesCompactsLeadingAndRepeatedBlanks(t *testing.T) {
 	for i := range want {
 		if lines[i] != want[i] {
 			t.Fatalf("lines[%d]=%q, want %q", i, lines[i], want[i])
+		}
+	}
+}
+
+func TestScrollLinesClampsOffset(t *testing.T) {
+	lines := []string{"a", "b", "c", "d", "e"}
+	view, offset, total := scrollLines(lines, 99, 2)
+	if total != 5 || offset != 3 {
+		t.Fatalf("offset=%d total=%d", offset, total)
+	}
+	if len(view) != 2 || view[0] != "d" || view[1] != "e" {
+		t.Fatalf("view=%#v", view)
+	}
+}
+
+func TestRenderSectionTabsIncludesVisibleLabels(t *testing.T) {
+	model := New(Options{Home: "/tmp"})
+	model.selectedSection = 1
+	tabs := model.renderSectionTabs(120)
+	for _, label := range []string{"Plan", "Execution", "Reviews", "Progress"} {
+		if !strings.Contains(tabs, label) {
+			t.Fatalf("tabs %q missing %q", tabs, label)
 		}
 	}
 }
