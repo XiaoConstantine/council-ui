@@ -24,6 +24,26 @@ func TestDiscoverProjectsFindsImmediateChildren(t *testing.T) {
 	}
 }
 
+func TestDiscoverProjectsIncludesFreshProjectWithoutCouncilOut(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "fresh", "go.mod"), "module example.com/fresh\n")
+
+	projects, err := DiscoverProjects([]string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(projects) != 1 {
+		t.Fatalf("len = %d, want 1", len(projects))
+	}
+	if projects[0].Name != "fresh" || projects[0].Runs != 0 {
+		t.Fatalf("project = %#v", projects[0])
+	}
+	if projects[0].Home != filepath.Join(root, "fresh", "council-out") {
+		t.Fatalf("home = %q", projects[0].Home)
+	}
+}
+
 func TestDiscoverProjectsFindsRootWorkspace(t *testing.T) {
 	root := t.TempDir()
 	write(t, filepath.Join(root, "council-out", "runs", "run-1", "status.txt"), "SUCCESS")

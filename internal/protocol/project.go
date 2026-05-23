@@ -101,31 +101,36 @@ func discoverProjectsInRoot(root string) ([]Project, error) {
 }
 
 func projectForWorkspace(workspace string) (Project, bool) {
+	workspace, _ = filepath.Abs(workspace)
+	workspaceInfo, err := os.Stat(workspace)
+	if err != nil || !workspaceInfo.IsDir() {
+		return Project{}, false
+	}
+
 	home := CouncilHomeNoEnv(workspace)
 	runsDir := filepath.Join(home, "runs")
-	entries, err := os.ReadDir(runsDir)
-	if err != nil {
-		return Project{}, false
-	}
-
 	var runCount int
 	var updatedAt time.Time
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		runCount++
-		info, err := entry.Info()
-		if err == nil && info.ModTime().After(updatedAt) {
-			updatedAt = info.ModTime()
+	if entries, err := os.ReadDir(runsDir); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			runCount++
+			info, err := entry.Info()
+			if err == nil && info.ModTime().After(updatedAt) {
+				updatedAt = info.ModTime()
+			}
 		}
 	}
 
-	if runCount == 0 {
+	if runCount == 0 && !looksLikeProjectWorkspace(workspace) {
 		return Project{}, false
 	}
+	if updatedAt.IsZero() {
+		updatedAt = latestProjectMarkerTime(workspace, workspaceInfo.ModTime())
+	}
 
-	workspace, _ = filepath.Abs(workspace)
 	return Project{
 		Name:      filepath.Base(workspace),
 		Workspace: workspace,
@@ -133,6 +138,40 @@ func projectForWorkspace(workspace string) (Project, bool) {
 		Runs:      runCount,
 		UpdatedAt: updatedAt,
 	}, true
+}
+
+func looksLikeProjectWorkspace(workspace string) bool {
+	for _, marker := range projectMarkers() {
+		if _, err := os.Stat(filepath.Join(workspace, marker)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func latestProjectMarkerTime(workspace string, fallback time.Time) time.Time {
+	latest := fallback
+	for _, marker := range projectMarkers() {
+		info, err := os.Stat(filepath.Join(workspace, marker))
+		if err == nil && info.ModTime().After(latest) {
+			latest = info.ModTime()
+		}
+	}
+	return latest
+}
+
+func projectMarkers() []string {
+	return []string{
+		".git",
+		".maestro-council.conf",
+		"go.mod",
+		"package.json",
+		"pyproject.toml",
+		"Cargo.toml",
+		"mix.exs",
+		"pom.xml",
+		"build.gradle",
+	}
 }
 
 func CouncilHomeNoEnv(workspace string) string {

@@ -232,6 +232,21 @@ func TestCouncilCommandForActionUsesSelectedRun(t *testing.T) {
 	}
 }
 
+func TestStartCommandWorksWithoutRuns(t *testing.T) {
+	model := New(Options{Home: "/tmp/fresh/council-out", Workspace: "/tmp/fresh"})
+
+	cmd, ok := model.councilCommandForAction("start")
+	if !ok {
+		t.Fatal("start command missing")
+	}
+	if cmd.Workspace != "/tmp/fresh" {
+		t.Fatalf("workspace = %q, want /tmp/fresh", cmd.Workspace)
+	}
+	if strings.Join(cmd.Args, " ") != "start --instance default" {
+		t.Fatalf("args = %#v", cmd.Args)
+	}
+}
+
 func TestResetActionRequiresConfirmation(t *testing.T) {
 	next, cmd := New(Options{Home: "/tmp"}).triggerAction("reset")
 	model := next.(Model)

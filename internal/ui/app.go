@@ -837,7 +837,7 @@ func (m Model) renderProjectPicker(width, height int) string {
 		lines = append(lines, "")
 	}
 	if len(m.projects) == 0 {
-		lines = append(lines, emptyStyle.Render("No projects with council-out/runs found."))
+		lines = append(lines, emptyStyle.Render("No project workspaces found."))
 		lines = append(lines, "")
 		lines = append(lines, "Run from a parent directory, or pass:")
 		lines = append(lines, mutedStyle.Render("  council-ui --projects-root /path/to/repos"))
@@ -885,7 +885,7 @@ func (m Model) runsControlView(width, height int) string {
 	}
 	b.WriteString("\n")
 	if len(runs) == 0 {
-		b.WriteString(emptyStyle.Render(truncate("No council runs found.", width)))
+		b.WriteString(emptyStyle.Render(truncate("No runs yet. Press s or Start to create council panes.", width)))
 		return b.String()
 	}
 	idWidth := min(20, max(10, width/2))
@@ -955,7 +955,22 @@ func (m Model) detailControlView(width, height int) string {
 	}
 	run, ok := m.selectedRunSnapshot()
 	if !ok {
-		return emptyStyle.Render(truncate("No run selected.", width))
+		var b strings.Builder
+		b.WriteString(sectionTitle.Render("Selected Project"))
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("Workspace: %s\n", truncate(m.currentWorkspace(), max(1, width-11))))
+		b.WriteString(fmt.Sprintf("Home: %s\n\n", truncate(m.opts.Home, max(1, width-6))))
+		b.WriteString(emptyStyle.Render(truncate("No runs yet. Use Start to create council panes for this project.", width)))
+		if len(m.actionLog) > 0 {
+			b.WriteString("\n\n")
+			b.WriteString(sectionTitle.Render("Action Log"))
+			b.WriteString("\n")
+			for _, line := range m.actionLog {
+				b.WriteString(truncate(line, width))
+				b.WriteString("\n")
+			}
+		}
+		return b.String()
 	}
 
 	var b strings.Builder

@@ -32,8 +32,9 @@ go build ./cmd/council-ui
 ## Run
 
 Run without flags to choose a project interactively. The picker scans the
-current directory and its parent for workspaces that contain
-`council-out/runs`:
+current directory and its parent for workspaces. Projects with no `council-out`
+yet are included when they look like normal project workspaces, such as Git or
+Go/Node/Python/Rust projects:
 
 ```bash
 council-ui
@@ -66,6 +67,9 @@ council-ui --workspace /path/to/workspace --council /path/to/maestro-council/bin
 The interactive picker intentionally scans project workspaces instead of
 silently loading a global home. Use `--home` when a project stores council
 artifacts outside its workspace.
+
+For a fresh project with no runs yet, select the project and press `s` or click
+`Start` to create the council panes in that workspace.
 
 ## Keys
 
