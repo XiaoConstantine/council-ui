@@ -71,9 +71,9 @@ renders from disk and pane preview/switching is disabled.
 ## Action Boundary
 
 `council-ui` does not execute orchestration logic itself. Dashboard actions call
-the configured `council` executable from the selected run workspace:
+the configured `council` executable from the selected project or run workspace:
 
-- `council start --instance <instance>`
+- `council run --instance <instance> -- <goal>`
 - `council attach --instance <instance>`
 - `council resume <run-id>`
 - `council exec <run-id>`

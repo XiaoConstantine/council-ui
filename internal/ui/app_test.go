@@ -220,30 +220,52 @@ func TestCouncilCommandForActionUsesSelectedRun(t *testing.T) {
 		t.Fatalf("args = %#v", cmd.Args)
 	}
 
-	cmd, ok = model.councilCommandForAction("start")
-	if !ok {
-		t.Fatal("start command missing")
-	}
+	cmd = model.councilRunCommand("ship feature")
 	if cmd.Workspace != "/work" {
-		t.Fatalf("start workspace = %q, want /work", cmd.Workspace)
+		t.Fatalf("run workspace = %q, want /work", cmd.Workspace)
 	}
-	if strings.Join(cmd.Args, " ") != "start --instance blue" {
-		t.Fatalf("start args = %#v", cmd.Args)
+	if strings.Join(cmd.Args, " ") != "run --instance blue -- ship feature" {
+		t.Fatalf("run args = %#v", cmd.Args)
 	}
 }
 
-func TestStartCommandWorksWithoutRuns(t *testing.T) {
+func TestRunCommandWorksWithoutRuns(t *testing.T) {
 	model := New(Options{Home: "/tmp/fresh/council-out", Workspace: "/tmp/fresh"})
 
-	cmd, ok := model.councilCommandForAction("start")
-	if !ok {
-		t.Fatal("start command missing")
-	}
+	cmd := model.councilRunCommand("build dashboard")
 	if cmd.Workspace != "/tmp/fresh" {
 		t.Fatalf("workspace = %q, want /tmp/fresh", cmd.Workspace)
 	}
-	if strings.Join(cmd.Args, " ") != "start --instance default" {
+	if strings.Join(cmd.Args, " ") != "run --instance default -- build dashboard" {
 		t.Fatalf("args = %#v", cmd.Args)
+	}
+}
+
+func TestStartActionPromptsForGoal(t *testing.T) {
+	next, cmd := New(Options{Home: "/tmp"}).triggerAction("start")
+	model := next.(Model)
+
+	if !model.enteringGoal {
+		t.Fatal("start should enter goal input mode")
+	}
+	if cmd != nil {
+		t.Fatal("start should not run before a goal is entered")
+	}
+}
+
+func TestGoalInputRunsCouncilRun(t *testing.T) {
+	model := New(Options{Home: "/tmp/fresh/council-out", Workspace: "/tmp/fresh"})
+	model.enteringGoal = true
+	model.goalInput = "ship ui"
+
+	next, cmd := model.updateGoalInput(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := next.(Model)
+
+	if updated.enteringGoal {
+		t.Fatal("goal input mode should close after enter")
+	}
+	if cmd == nil {
+		t.Fatal("entering a goal should run a command")
 	}
 }
 

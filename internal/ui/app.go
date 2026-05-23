@@ -96,6 +96,8 @@ type Model struct {
 	height                int
 	filter                string
 	filtering             bool
+	enteringGoal          bool
+	goalInput             string
 	preview               string
 	previewErr            error
 	err                   error
@@ -242,6 +244,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.zoom {
 			return m.updateZoomKey(msg)
 		}
+		if m.enteringGoal {
+			return m.updateGoalInput(msg)
+		}
 		if m.filtering {
 			return m.updateFilter(msg)
 		}
@@ -283,6 +288,37 @@ func (m Model) updateZoomKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.zoomScroll = 0
 	case "G", "end":
 		m.zoomScroll = 1 << 30
+	}
+	return m, nil
+}
+
+func (m Model) updateGoalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.enteringGoal = false
+		m.goalInput = ""
+		m.status = "start cancelled"
+	case "enter":
+		goal := strings.TrimSpace(m.goalInput)
+		if goal == "" {
+			m.status = "goal is required"
+			return m, nil
+		}
+		m.enteringGoal = false
+		m.goalInput = ""
+		return m, m.actionCmd(m.councilRunCommand(goal))
+	case "backspace", "ctrl+h":
+		if len(m.goalInput) > 0 {
+			m.goalInput = m.goalInput[:len(m.goalInput)-1]
+		}
+	case "ctrl+u":
+		m.goalInput = ""
+	case " ":
+		m.goalInput += " "
+	default:
+		if msg.Type == tea.KeyRunes {
+			m.goalInput += string(msg.Runes)
+		}
 	}
 	return m, nil
 }
@@ -510,6 +546,10 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 	switch action {
+	case "start":
+		m.enteringGoal = true
+		m.goalInput = ""
+		m.status = "enter goal, then press Enter"
 	case "attach":
 		if m.focus == "panes" {
 			if pane := m.currentPane(); pane != nil {
@@ -564,8 +604,6 @@ func (m Model) actionCmd(cmd councilCommand) tea.Cmd {
 func (m Model) councilCommandForAction(action string) (councilCommand, bool) {
 	instance := m.currentInstance()
 	switch action {
-	case "start":
-		return councilCommand{Label: "start", Workspace: m.currentWorkspace(), Args: []string{"start", "--instance", instance}}, true
 	case "attach":
 		return councilCommand{Label: "attach", Workspace: m.currentWorkspace(), Args: []string{"attach", "--instance", instance}}, true
 	case "resume":
@@ -584,6 +622,14 @@ func (m Model) councilCommandForAction(action string) (councilCommand, bool) {
 		return councilCommand{Label: "reset", Workspace: m.currentWorkspace(), Args: []string{"reset", "--instance", instance}}, true
 	default:
 		return councilCommand{}, false
+	}
+}
+
+func (m Model) councilRunCommand(goal string) councilCommand {
+	return councilCommand{
+		Label:     "run",
+		Workspace: m.currentWorkspace(),
+		Args:      []string{"run", "--instance", m.currentInstance(), "--", goal},
 	}
 }
 
@@ -698,6 +744,9 @@ func (m Model) headerBlockWithStateView() string {
 	header := m.headerBlockView()
 	if m.filtering {
 		header += "\n" + keyStyle.Render("filter: ") + m.filter
+	}
+	if m.enteringGoal {
+		header += "\n" + keyStyle.Render("goal: ") + m.goalInput
 	}
 	if m.confirmReset {
 		header += "\n" + warnStyle.Render("Reset selected instance? y/N")
@@ -885,7 +934,7 @@ func (m Model) runsControlView(width, height int) string {
 	}
 	b.WriteString("\n")
 	if len(runs) == 0 {
-		b.WriteString(emptyStyle.Render(truncate("No runs yet. Press s or Start to create council panes.", width)))
+		b.WriteString(emptyStyle.Render(truncate("No runs yet. Press s or Start to enter a goal.", width)))
 		return b.String()
 	}
 	idWidth := min(20, max(10, width/2))
@@ -960,7 +1009,7 @@ func (m Model) detailControlView(width, height int) string {
 		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf("Workspace: %s\n", truncate(m.currentWorkspace(), max(1, width-11))))
 		b.WriteString(fmt.Sprintf("Home: %s\n\n", truncate(m.opts.Home, max(1, width-6))))
-		b.WriteString(emptyStyle.Render(truncate("No runs yet. Use Start to create council panes for this project.", width)))
+		b.WriteString(emptyStyle.Render(truncate("No runs yet. Use Start to enter a goal and create council panes.", width)))
 		if len(m.actionLog) > 0 {
 			b.WriteString("\n\n")
 			b.WriteString(sectionTitle.Render("Action Log"))
@@ -1075,6 +1124,9 @@ func (m Model) paneDetailControlView(width, height int) string {
 }
 
 func (m Model) footerControlView() string {
+	if m.enteringGoal {
+		return footer.Width(m.width).Render(truncate("Enter goal  enter run council  esc cancel  ctrl+u clear", m.width))
+	}
 	items := []string{
 		keyStyle.Render("j/k") + " move",
 		keyStyle.Render("tab") + " focus",

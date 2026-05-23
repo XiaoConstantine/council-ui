@@ -69,7 +69,11 @@ silently loading a global home. Use `--home` when a project stores council
 artifacts outside its workspace.
 
 For a fresh project with no runs yet, select the project and press `s` or click
-`Start` to create the council panes in that workspace.
+`Start`. The UI prompts for the goal, then runs:
+
+```bash
+council run --instance <instance> -- <goal>
+```
 
 ## Keys
 
@@ -86,7 +90,7 @@ Dashboard:
 - `j` / `k`: move within the focused list
 - `g` / `G`: jump to first or last row in the focused list
 - `z` / `o`: zoom the selected artifact or pane output
-- `s`: run `council start --instance <instance>`
+- `s`: enter a goal, then run `council run --instance <instance> -- <goal>`
 - `a`: attach/switch to the selected pane, or run `council attach`
 - `r`: run `council resume <run-id>`
 - `e`: run `council exec <run-id>`
