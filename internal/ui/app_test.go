@@ -241,6 +241,15 @@ func TestRunCommandWorksWithoutRuns(t *testing.T) {
 	}
 }
 
+func TestActionEnvPinsCouncilHome(t *testing.T) {
+	model := New(Options{Home: "/tmp/fresh/council-out", Workspace: "/tmp/fresh"})
+
+	env := strings.Join(model.actionEnv(), "\n")
+	if !strings.Contains(env, "MAESTRO_COUNCIL_HOME=/tmp/fresh/council-out") {
+		t.Fatalf("env missing council home:\n%s", env)
+	}
+}
+
 func TestStartActionPromptsForGoal(t *testing.T) {
 	next, cmd := New(Options{Home: "/tmp"}).triggerAction("start")
 	model := next.(Model)

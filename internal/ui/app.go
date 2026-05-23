@@ -596,9 +596,18 @@ func (m Model) actionCmd(cmd councilCommand) tea.Cmd {
 		if workspace != "" {
 			process.Dir = workspace
 		}
+		process.Env = m.actionEnv()
 		out, err := process.CombinedOutput()
 		return actionDoneMsg{action: cmd.Label, output: string(out), err: err}
 	}
+}
+
+func (m Model) actionEnv() []string {
+	env := os.Environ()
+	if m.opts.Home != "" {
+		env = append(env, "MAESTRO_COUNCIL_HOME="+m.opts.Home)
+	}
+	return env
 }
 
 func (m Model) councilCommandForAction(action string) (councilCommand, bool) {
