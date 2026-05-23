@@ -13,7 +13,9 @@ The first version is a focused terminal dashboard:
   recent progress log entries
 - discovers live council panes from tmux labels
 - previews the selected agent pane with `tmux capture-pane`
-- switches to the selected live pane with `Enter`
+- switches to the selected live pane with `Enter` or the command bar
+- exposes clickable actions for start, attach, resume, exec, zoom, reset,
+  refresh, and quit while keeping orchestration in `maestro-council`
 
 ## Install
 
@@ -55,6 +57,12 @@ Or pass the council home directly:
 council-ui --home /path/to/workspace/council-out
 ```
 
+If the `council` executable is not on `PATH`, point actions at it explicitly:
+
+```bash
+council-ui --workspace /path/to/workspace --council /path/to/maestro-council/bin/council
+```
+
 The interactive picker intentionally scans project workspaces instead of
 silently loading a global home. Use `--home` when a project stores council
 artifacts outside its workspace.
@@ -71,17 +79,31 @@ Project picker:
 Dashboard:
 
 - `j` / `k`: move through runs
+- `g` / `G`: jump to first or last run
 - `h` / `l`: move through Plan, Execution, Reviews, and Progress sections
 - `Space`: expand or collapse the selected section
 - `Tab`: cycle codex, cc, amp, orchestrator pane preview
-- `o`: open the selected artifact in a modal viewer
+- `o` / `z`: open the selected artifact in a modal viewer
 - `Ctrl+D` / `Ctrl+U`: scroll artifact preview down or up
 - `PageDown` / `PageUp`: scroll artifact preview down or up
 - `Enter`: switch tmux focus to the selected live pane
+- `s`: run `council start --instance <instance>`
+- `a`: attach/switch to the selected live pane, or run `council attach`
+- `u`: run `council resume <run-id>`
+- `e`: run `council exec <run-id>`
+- `R`: confirm and run `council reset --instance <instance>`
+- `r` / `Ctrl+R`: refresh immediately
 - `/`: filter by run id, task, workspace, instance, phase, or stage
 - `P`: return to project picker
-- `r`: refresh immediately
 - `q`: quit
+
+The command bar is clickable in terminals with mouse reporting:
+
+```text
+[Start] [Attach] [Resume] [Exec] [Zoom] [Reset] [Refresh] [Quit]
+```
+
+Clicking a run selects it; mouse wheel scrolls artifact and modal content.
 
 Artifact modal:
 

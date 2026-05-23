@@ -12,6 +12,7 @@ orchestrator. The main job is to answer:
 ## UI Priorities
 
 - Dense scanability over decoration.
+- Clickable command bar for high-confidence actions without memorizing keys.
 - One-keystroke switching into the selected live pane.
 - Clear distinction between durable run progress and live pane health.
 - Fast filtering across task text, run id, workspace, instance, and stage.
@@ -30,8 +31,6 @@ orchestrator. The main job is to answer:
 - Add contextual `?` help and an action palette for discoverability.
 - Expand the artifact modal into an artifact browser with search, file picker,
   copy path, and open-in-editor actions.
-- Add actions for `council resume <run-id>` and `council exec <run-id>`.
-- Add confirmation flow for disruptive actions like reset.
 - Improve live pane preview cleanup and truncation.
 - Add structured `events.jsonl` support when `maestro-council` produces it.
 - Group runs by workspace and instance once there are enough active councils.

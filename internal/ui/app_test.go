@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/XiaoConstantine/council-ui/internal/protocol"
 )
@@ -180,5 +181,103 @@ func TestArtifactModalScrollsAndCopiesOffsetOnClose(t *testing.T) {
 	}
 	if closed.artifactScroll != 15 {
 		t.Fatalf("artifactScroll after close = %d", closed.artifactScroll)
+	}
+}
+
+func TestCommandButtonAtMapsVisibleButtons(t *testing.T) {
+	model := New(Options{Home: "/tmp"})
+
+	if got := model.commandButtonAt(len("Actions ")); got != "start" {
+		t.Fatalf("first action = %q, want start", got)
+	}
+
+	zoomX := len("Actions [Start] [Attach] [Resume] [Exec] ")
+	if got := model.commandButtonAt(zoomX); got != "zoom" {
+		t.Fatalf("zoom action = %q, want zoom", got)
+	}
+
+	if got := model.commandButtonAt(0); got != "" {
+		t.Fatalf("prefix action = %q, want empty", got)
+	}
+}
+
+func TestCouncilCommandForActionUsesSelectedRun(t *testing.T) {
+	model := New(Options{Home: "/tmp/project/council-out", Workspace: "/tmp/project"})
+	model.runs = []protocol.Run{{
+		ID:        "20260522-120000-1",
+		Workspace: "/work",
+		Instance:  "blue",
+	}}
+
+	cmd, ok := model.councilCommandForAction("resume")
+	if !ok {
+		t.Fatal("resume command missing")
+	}
+	if cmd.Workspace != "/work" {
+		t.Fatalf("workspace = %q, want /work", cmd.Workspace)
+	}
+	if strings.Join(cmd.Args, " ") != "resume 20260522-120000-1" {
+		t.Fatalf("args = %#v", cmd.Args)
+	}
+
+	cmd, ok = model.councilCommandForAction("start")
+	if !ok {
+		t.Fatal("start command missing")
+	}
+	if cmd.Workspace != "/work" {
+		t.Fatalf("start workspace = %q, want /work", cmd.Workspace)
+	}
+	if strings.Join(cmd.Args, " ") != "start --instance blue" {
+		t.Fatalf("start args = %#v", cmd.Args)
+	}
+}
+
+func TestResetActionRequiresConfirmation(t *testing.T) {
+	next, cmd := New(Options{Home: "/tmp"}).triggerAction("reset")
+	model := next.(Model)
+
+	if !model.confirmReset {
+		t.Fatal("reset should set confirmReset")
+	}
+	if cmd != nil {
+		t.Fatal("reset should not run a command before confirmation")
+	}
+}
+
+func TestSelectRunKeepsSelectionVisible(t *testing.T) {
+	model := New(Options{Home: "/tmp"})
+	model.width = 100
+	model.height = 18
+	for i := 0; i < 10; i++ {
+		model.runs = append(model.runs, protocol.Run{ID: string(rune('a' + i))})
+	}
+
+	model.selectRun(9)
+	visibleRows, _ := runListMetrics(max(8, model.height-lipgloss.Height(model.renderTop())-lipgloss.Height(model.renderBottom())), len(model.runs))
+
+	if model.runScroll != len(model.runs)-visibleRows {
+		t.Fatalf("runScroll = %d, want %d", model.runScroll, len(model.runs)-visibleRows)
+	}
+}
+
+func TestMouseClickSelectsRenderedRun(t *testing.T) {
+	model := New(Options{Home: "/tmp"})
+	model.width = 120
+	model.height = 30
+	model.runs = []protocol.Run{
+		{ID: "first"},
+		{ID: "second"},
+	}
+
+	next, _ := model.updateMouse(tea.MouseMsg{
+		X:      2,
+		Y:      lipgloss.Height(model.renderTop()) + 4,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	})
+	got := next.(Model)
+
+	if got.selectedRun != 1 {
+		t.Fatalf("selectedRun = %d, want 1", got.selectedRun)
 	}
 }

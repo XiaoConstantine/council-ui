@@ -18,6 +18,7 @@ func main() {
 		home            string
 		workspace       string
 		projectsRoot    string
+		councilCmd      string
 		limit           int
 		maxReviewRounds int
 		refresh         time.Duration
@@ -26,6 +27,7 @@ func main() {
 	flag.StringVar(&home, "home", "", "path to council-out")
 	flag.StringVar(&workspace, "workspace", "", "workspace containing council-out")
 	flag.StringVar(&projectsRoot, "projects-root", "", "directory to scan for projects with council-out")
+	flag.StringVar(&councilCmd, "council", "council", "path to the maestro-council command")
 	flag.IntVar(&limit, "limit", 40, "maximum runs to show")
 	flag.IntVar(&maxReviewRounds, "max-review-rounds", protocol.DefaultMaxReviewRounds, "maximum council review rounds")
 	flag.DurationVar(&refresh, "refresh", time.Second, "refresh interval")
@@ -41,7 +43,9 @@ func main() {
 
 	model := ui.New(ui.Options{
 		Home:         home,
+		Workspace:    workspace,
 		ProjectRoots: projectRoots,
+		CouncilCmd:   councilCmd,
 		Load: protocol.LoadOptions{
 			Limit:           limit,
 			MaxReviewRounds: maxReviewRounds,
@@ -49,7 +53,7 @@ func main() {
 		Refresh: refresh,
 	})
 
-	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(context.Background()))
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(context.Background()))
 	if _, err := program.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "council-ui: %v\n", err)
 		os.Exit(1)

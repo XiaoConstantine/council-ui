@@ -67,3 +67,17 @@ Named instances append `-<instance>`, for example
 
 The UI treats tmux as optional. If tmux is unavailable, run progress still
 renders from disk and pane preview/switching is disabled.
+
+## Action Boundary
+
+`council-ui` does not execute orchestration logic itself. Dashboard actions call
+the configured `council` executable from the selected run workspace:
+
+- `council start --instance <instance>`
+- `council attach --instance <instance>`
+- `council resume <run-id>`
+- `council exec <run-id>`
+- `council reset --instance <instance>`
+
+Reset is confirmation-gated in the UI. After each action, the UI reloads durable
+run state and live tmux pane state from the protocol sources above.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,9 +18,22 @@ import (
 
 type Options struct {
 	Home         string
+	Workspace    string
 	ProjectRoots []string
+	CouncilCmd   string
 	Load         protocol.LoadOptions
 	Refresh      time.Duration
+}
+
+type commandButton struct {
+	Label  string
+	Action string
+}
+
+type councilCommand struct {
+	Label     string
+	Workspace string
+	Args      []string
 }
 
 type Model struct {
@@ -32,11 +46,14 @@ type Model struct {
 	councils        []tmux.Council
 	panes           []tmux.Pane
 	selectedRun     int
+	runScroll       int
 	selectedAgent   int
 	selectedSection int
 	artifactScroll  int
 	artifactModal   bool
 	modalScroll     int
+	confirmReset    bool
+	actionLog       []string
 	expanded        map[string]bool
 	width           int
 	height          int
@@ -71,11 +88,31 @@ type switchMsg struct {
 	err error
 }
 
+type actionDoneMsg struct {
+	action string
+	output string
+	err    error
+}
+
 type tickMsg struct{}
+
+var commandButtons = []commandButton{
+	{Label: "Start", Action: "start"},
+	{Label: "Attach", Action: "attach"},
+	{Label: "Resume", Action: "resume"},
+	{Label: "Exec", Action: "exec"},
+	{Label: "Zoom", Action: "zoom"},
+	{Label: "Reset", Action: "reset"},
+	{Label: "Refresh", Action: "refresh"},
+	{Label: "Quit", Action: "quit"},
+}
 
 func New(opts Options) Model {
 	if opts.Refresh <= 0 {
 		opts.Refresh = time.Second
+	}
+	if opts.CouncilCmd == "" {
+		opts.CouncilCmd = "council"
 	}
 	return Model{
 		opts:            opts,
@@ -127,6 +164,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.selectedRun >= len(m.visibleRuns()) {
 			m.selectedRun = max(0, len(m.visibleRuns())-1)
 		}
+		m.keepRunVisible()
 		return m, nil
 	case switchMsg:
 		if msg.err != nil {
@@ -135,6 +173,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "switched to pane"
 		}
 		return m, nil
+	case actionDoneMsg:
+		line := msg.action + ": ok"
+		if msg.err != nil {
+			line = msg.action + ": " + msg.err.Error()
+		}
+		if strings.TrimSpace(msg.output) != "" {
+			line += " | " + strings.Join(strings.Fields(msg.output), " ")
+		}
+		m.status = line
+		m.actionLog = append([]string{line}, m.actionLog...)
+		if len(m.actionLog) > 4 {
+			m.actionLog = m.actionLog[:4]
+		}
+		m.confirmReset = false
+		return m, m.refreshCmd()
 	case tea.KeyMsg:
 		if m.choosingProject {
 			return m.updateProjectPicker(msg)
@@ -145,20 +198,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.filtering {
 			return m.updateFilter(msg)
 		}
+		if m.confirmReset {
+			switch msg.String() {
+			case "y", "Y":
+				if cmd, ok := m.councilCommandForAction("reset"); ok {
+					return m, m.actionCmd(cmd)
+				}
+				return m, nil
+			case "n", "N", "esc":
+				m.confirmReset = false
+				m.status = "reset cancelled"
+				return m, nil
+			}
+		}
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
 		case "j", "down":
 			if m.selectedRun < len(m.visibleRuns())-1 {
-				m.selectedRun++
+				m.selectRun(m.selectedRun + 1)
 				m.artifactScroll = 0
 			}
 			return m, m.refreshCmd()
 		case "k", "up":
 			if m.selectedRun > 0 {
-				m.selectedRun--
+				m.selectRun(m.selectedRun - 1)
 				m.artifactScroll = 0
 			}
+			return m, m.refreshCmd()
+		case "g":
+			m.selectRun(0)
+			m.artifactScroll = 0
+			return m, m.refreshCmd()
+		case "G":
+			m.selectRun(len(m.visibleRuns()) - 1)
+			m.artifactScroll = 0
 			return m, m.refreshCmd()
 		case "tab":
 			m.selectedAgent = (m.selectedAgent + 1) % len(agentOrder)
@@ -191,7 +265,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "end":
 			m.artifactScroll = 1 << 30
 			return m, nil
-		case "o":
+		case "o", "z":
 			m.artifactModal = true
 			m.modalScroll = m.artifactScroll
 			return m, nil
@@ -206,6 +280,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, m.switchCmd(pane)
+		case "a":
+			return m.triggerAction("attach")
+		case "s":
+			return m.triggerAction("start")
+		case "u":
+			return m.triggerAction("resume")
+		case "e":
+			return m.triggerAction("exec")
+		case "R":
+			return m.triggerAction("reset")
+		case "ctrl+r":
+			return m.triggerAction("refresh")
 		case "r":
 			return m, m.refreshCmd()
 		case "P":
@@ -216,6 +302,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.filtering = true
 			return m, nil
 		}
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
 	}
 	return m, nil
 }
@@ -240,8 +328,9 @@ func (m Model) updateProjectPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		project := m.projects[m.selectedProject]
 		m.opts.Home = project.Home
+		m.opts.Workspace = project.Workspace
 		m.choosingProject = false
-		m.selectedRun = 0
+		m.selectRun(0)
 		m.artifactScroll = 0
 		m.filter = ""
 		m.filtering = false
@@ -293,23 +382,147 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filtering = false
 	case "enter":
 		m.filtering = false
-		m.selectedRun = 0
+		m.selectRun(0)
 		m.artifactScroll = 0
 	case "backspace":
 		if len(m.filter) > 0 {
 			m.filter = m.filter[:len(m.filter)-1]
-			m.selectedRun = 0
+			m.selectRun(0)
 		}
 	case "ctrl+u":
 		m.filter = ""
-		m.selectedRun = 0
+		m.selectRun(0)
 	default:
 		if len(msg.String()) == 1 {
 			m.filter += msg.String()
-			m.selectedRun = 0
+			m.selectRun(0)
 		}
 	}
 	return m, m.refreshCmd()
+}
+
+func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if msg.Action != tea.MouseActionPress {
+		return m, nil
+	}
+	if msg.Button == tea.MouseButtonWheelUp {
+		if m.artifactModal {
+			m.modalScroll = max(0, m.modalScroll-3)
+		} else {
+			m.artifactScroll = max(0, m.artifactScroll-3)
+		}
+		return m, nil
+	}
+	if msg.Button == tea.MouseButtonWheelDown {
+		if m.artifactModal {
+			m.modalScroll += 3
+		} else {
+			m.artifactScroll += 3
+		}
+		return m, nil
+	}
+	if msg.Button != tea.MouseButtonLeft {
+		return m, nil
+	}
+	if m.artifactModal {
+		m.artifactModal = false
+		m.artifactScroll = m.modalScroll
+		return m, nil
+	}
+	if msg.Y == 1 {
+		if action := m.commandButtonAt(msg.X); action != "" {
+			return m.triggerAction(action)
+		}
+	}
+
+	topHeight := lipgloss.Height(m.renderTop())
+	bodyY := msg.Y - topHeight
+	listWidth := clamp(38, 34, max(34, m.width/3))
+	if msg.X < listWidth && bodyY >= 1 {
+		visibleRows, hasRange := runListMetrics(max(8, m.height-topHeight-lipgloss.Height(m.renderBottom())), len(m.visibleRuns()))
+		offset := scrollForSelection(m.runScroll, m.selectedRun, len(m.visibleRuns()), visibleRows)
+		firstRowY := 1
+		if hasRange {
+			firstRowY = 2
+		}
+		row := (bodyY - firstRowY) / 3
+		if bodyY >= firstRowY && row >= 0 && row < visibleRows && offset+row < len(m.visibleRuns()) {
+			m.selectRun(offset + row)
+			m.artifactScroll = 0
+			return m, m.refreshCmd()
+		}
+	}
+	return m, nil
+}
+
+func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
+	switch action {
+	case "attach":
+		if pane, ok := m.selectedPane(); ok {
+			return m, m.switchCmd(pane)
+		}
+		if cmd, ok := m.councilCommandForAction(action); ok {
+			return m, m.actionCmd(cmd)
+		}
+		m.status = "no live pane or council instance to attach"
+	case "zoom":
+		m.artifactModal = true
+		m.modalScroll = m.artifactScroll
+	case "reset":
+		m.confirmReset = true
+	case "refresh":
+		return m, m.refreshCmd()
+	case "quit":
+		return m, tea.Quit
+	default:
+		if cmd, ok := m.councilCommandForAction(action); ok {
+			return m, m.actionCmd(cmd)
+		}
+	}
+	return m, nil
+}
+
+func (m Model) actionCmd(cmd councilCommand) tea.Cmd {
+	return func() tea.Msg {
+		workspace := cmd.Workspace
+		if workspace == "" {
+			workspace = m.currentWorkspace()
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		process := exec.CommandContext(ctx, m.opts.CouncilCmd, cmd.Args...)
+		if workspace != "" {
+			process.Dir = workspace
+		}
+		out, err := process.CombinedOutput()
+		return actionDoneMsg{action: cmd.Label, output: string(out), err: err}
+	}
+}
+
+func (m Model) councilCommandForAction(action string) (councilCommand, bool) {
+	instance := m.currentInstance()
+	switch action {
+	case "start":
+		return councilCommand{Label: "start", Workspace: m.currentWorkspace(), Args: []string{"start", "--instance", instance}}, true
+	case "attach":
+		return councilCommand{Label: "attach", Workspace: m.currentWorkspace(), Args: []string{"attach", "--instance", instance}}, true
+	case "resume":
+		run, ok := m.selectedRunSnapshot()
+		if !ok {
+			return councilCommand{}, false
+		}
+		return councilCommand{Label: "resume", Workspace: run.Workspace, Args: []string{"resume", run.ID}}, true
+	case "exec":
+		run, ok := m.selectedRunSnapshot()
+		if !ok {
+			return councilCommand{}, false
+		}
+		return councilCommand{Label: "exec", Workspace: run.Workspace, Args: []string{"exec", run.ID}}, true
+	case "reset":
+		return councilCommand{Label: "reset", Workspace: m.currentWorkspace(), Args: []string{"reset", "--instance", instance}}, true
+	default:
+		return councilCommand{}, false
+	}
 }
 
 func (m Model) View() string {
@@ -402,7 +615,7 @@ func (m Model) renderTop() string {
 		live = "tmux unavailable"
 	}
 	subtitle := fmt.Sprintf("%s  %s  %s", shortPath(m.opts.Home), live, m.loadedAt.Format("15:04:05"))
-	return titleBar.Width(m.width).Render(
+	title := titleBar.Width(m.width).Render(
 		lipgloss.JoinHorizontal(
 			lipgloss.Center,
 			titleStyle.Render("council-ui"),
@@ -410,6 +623,34 @@ func (m Model) renderTop() string {
 			subtleStyle.Render(subtitle),
 		),
 	)
+	return lipgloss.JoinVertical(lipgloss.Left, title, m.renderCommandBar())
+}
+
+func (m Model) renderCommandBar() string {
+	return commandBar.Width(m.width).Render("Actions " + m.commandBarPlain())
+}
+
+func (m Model) commandBarPlain() string {
+	parts := make([]string, 0, len(commandButtons))
+	for _, button := range commandButtons {
+		parts = append(parts, "["+button.Label+"]")
+	}
+	return strings.Join(parts, " ")
+}
+
+func (m Model) commandButtonAt(x int) string {
+	pos := len("Actions ")
+	if x < pos {
+		return ""
+	}
+	for _, button := range commandButtons {
+		token := "[" + button.Label + "]"
+		if x >= pos && x < pos+len(token) {
+			return button.Action
+		}
+		pos += len(token) + 1
+	}
+	return ""
 }
 
 func (m Model) renderProjectTop() string {
@@ -428,11 +669,14 @@ func (m Model) renderProjectTop() string {
 }
 
 func (m Model) renderBottom() string {
-	mode := "j/k runs  h/l sections  space expand  tab agent  o open artifact  ctrl+d/u scroll  enter switch  / filter  P projects  q quit"
+	mode := "j/k runs  h/l sections  space expand  tab agent  o/z zoom  enter switch  s start  a attach  u resume  e exec  R reset  r refresh  / filter  P projects  q quit"
 	if m.filtering {
 		mode = "filter: " + m.filter + "  enter apply  esc close  ctrl+u clear"
 	} else if m.filter != "" {
 		mode += "  filter: " + m.filter
+	}
+	if m.confirmReset {
+		mode = "Reset selected instance? y/N"
 	}
 	if m.status != "" {
 		mode += "  " + m.status
@@ -486,7 +730,14 @@ func (m Model) renderRunList(width, height int) string {
 	}
 
 	lines := make([]string, 0, height)
-	for i, run := range runs {
+	visibleRows, hasRange := runListMetrics(height, len(runs))
+	offset := scrollForSelection(m.runScroll, m.selectedRun, len(runs), visibleRows)
+	if hasRange {
+		lines = append(lines, mutedStyle.Render(fmt.Sprintf("runs %d-%d/%d", offset+1, min(len(runs), offset+visibleRows), len(runs))))
+	}
+	for row := 0; row < visibleRows && offset+row < len(runs); row++ {
+		i := offset + row
+		run := runs[i]
 		prefix := "  "
 		style := listItemStyle
 		if i == m.selectedRun {
@@ -542,6 +793,13 @@ func (m Model) renderDetail(width, height int) string {
 		start := max(0, len(run.Progress)-5)
 		for _, event := range run.Progress[start:] {
 			lines = append(lines, fmt.Sprintf("  %s  %s", mutedStyle.Render(event.Time), event.Stage))
+		}
+	}
+	if len(m.actionLog) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, sectionTitle.Render("Actions"))
+		for _, line := range m.actionLog {
+			lines = append(lines, mutedStyle.Render(truncate("  "+line, width-4)))
 		}
 	}
 
@@ -938,6 +1196,50 @@ func (m Model) selectedRunSnapshot() (protocol.Run, bool) {
 	return runs[m.selectedRun], true
 }
 
+func (m *Model) selectRun(index int) {
+	runs := m.visibleRuns()
+	if len(runs) == 0 {
+		m.selectedRun = 0
+		m.runScroll = 0
+		return
+	}
+	m.selectedRun = clamp(index, 0, len(runs)-1)
+	m.keepRunVisible()
+}
+
+func (m *Model) keepRunVisible() {
+	if m.height == 0 {
+		return
+	}
+	topHeight := lipgloss.Height(m.renderTop())
+	bottomHeight := lipgloss.Height(m.renderBottom())
+	bodyHeight := max(8, m.height-topHeight-bottomHeight)
+	visibleRows, _ := runListMetrics(bodyHeight, len(m.visibleRuns()))
+	m.runScroll = scrollForSelection(m.runScroll, m.selectedRun, len(m.visibleRuns()), visibleRows)
+}
+
+func (m Model) currentInstance() string {
+	if run, ok := m.selectedRunSnapshot(); ok && run.Instance != "" {
+		return run.Instance
+	}
+	return "default"
+}
+
+func (m Model) currentWorkspace() string {
+	if run, ok := m.selectedRunSnapshot(); ok && run.Workspace != "" {
+		return run.Workspace
+	}
+	if m.opts.Workspace != "" {
+		return m.opts.Workspace
+	}
+	if m.opts.Home != "" {
+		if parent := filepath.Dir(m.opts.Home); filepath.Base(m.opts.Home) == "council-out" {
+			return parent
+		}
+	}
+	return ""
+}
+
 func (m Model) selectedPane() (tmux.Pane, bool) {
 	run, ok := m.selectedRunSnapshot()
 	if !ok {
@@ -1124,6 +1426,34 @@ func scrollLines(lines []string, offset int, height int) ([]string, int, int) {
 	return lines[offset:end], offset, total
 }
 
+func runRowsForHeight(height int) int {
+	return max(1, (max(1, height-1))/3)
+}
+
+func runListMetrics(height, total int) (visibleRows int, hasRange bool) {
+	visibleRows = runRowsForHeight(height)
+	hasRange = total > visibleRows
+	if hasRange {
+		visibleRows = max(1, (max(1, height-2))/3)
+	}
+	return visibleRows, hasRange
+}
+
+func scrollForSelection(scroll, selected, total, visible int) int {
+	if total <= 0 || visible <= 0 || total <= visible {
+		return 0
+	}
+	maxScroll := total - visible
+	scroll = clamp(scroll, 0, maxScroll)
+	if selected < scroll {
+		return selected
+	}
+	if selected >= scroll+visible {
+		return min(maxScroll, selected-visible+1)
+	}
+	return scroll
+}
+
 func centerBox(width, height int, content string) string {
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, content, lipgloss.WithWhitespaceChars(" "))
 }
@@ -1198,6 +1528,10 @@ var (
 	titleBar = lipgloss.NewStyle().
 			Padding(0, 1).
 			Background(lipgloss.Color("236"))
+	commandBar = lipgloss.NewStyle().
+			Padding(0, 1).
+			Foreground(lipgloss.Color("110")).
+			Background(lipgloss.Color("235"))
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("230"))
