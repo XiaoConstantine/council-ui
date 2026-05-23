@@ -14,7 +14,7 @@ The first version is a focused terminal control surface:
 - discovers live council panes from tmux labels
 - previews selected run artifacts and selected council pane output
 - switches to the selected live pane from the panes list
-- exposes clickable actions for start, attach, resume, exec, zoom, reset,
+- exposes clickable actions for start, attach, resume, exec, cancel, zoom, reset,
   refresh, and quit while keeping orchestration in `maestro-council`
 
 ## Install
@@ -94,6 +94,7 @@ Dashboard:
 - `a`: attach/switch to the selected pane, or run `council attach`
 - `r`: run `council resume <run-id>`
 - `e`: run `council exec <run-id>`
+- `c`: send `Ctrl-C` to the selected run's orchestrator pane to cancel it
 - `R`: confirm and run `council reset --instance <instance>`
 - `Ctrl+R`: refresh immediately
 - `/`: filter by run id, task, workspace, instance, phase, or stage
@@ -103,7 +104,7 @@ Dashboard:
 The command bar is clickable in terminals with mouse reporting:
 
 ```text
-[Start] [Attach] [Resume] [Exec] [Zoom] [Reset] [Refresh] [Quit]
+[Start] [Attach] [Resume] [Exec] [Cancel] [Zoom] [Reset] [Refresh] [Quit]
 ```
 
 Clicking a run, artifact, or pane selects it. Mouse wheel scrolls zoomed
@@ -140,6 +141,9 @@ It also reads live tmux state with:
 ```bash
 tmux list-panes -a -F '#{pane_id} ... #{@name} #{@maestro_council_workspace}'
 ```
+
+Cancel sends `Ctrl-C` directly to the matching `council-orchestrator` pane with
+`tmux send-keys`; Reset still delegates to `council reset`.
 
 The UI intentionally does not reimplement `council run`, `council plan`,
 `council exec`, or `council resume`. Those remain protocol producers invoked

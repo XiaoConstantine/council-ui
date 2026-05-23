@@ -65,3 +65,20 @@ func TestSelectPaneUsesWindowThenPane(t *testing.T) {
 		t.Fatalf("second call = %q", runner.calls[1])
 	}
 }
+
+func TestSendKeysTargetsPane(t *testing.T) {
+	runner := &fakeRunner{}
+	client := Client{Runner: runner}
+
+	err := client.SendKeys(context.Background(), "%7", "C-c")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(runner.calls) != 1 {
+		t.Fatalf("calls = %#v", runner.calls)
+	}
+	if runner.calls[0] != "tmux send-keys -t %7 C-c" {
+		t.Fatalf("call = %q", runner.calls[0])
+	}
+}

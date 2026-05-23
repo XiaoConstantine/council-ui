@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +11,17 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/XiaoConstantine/council-ui/internal/protocol"
+	"github.com/XiaoConstantine/council-ui/internal/tmux"
 )
+
+type fakeTmuxRunner struct {
+	calls []string
+}
+
+func (f *fakeTmuxRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
+	return nil, nil
+}
 
 func TestArtifactPreviewPathUsesCompletedArtifacts(t *testing.T) {
 	run := protocol.Run{
@@ -191,7 +202,7 @@ func TestCommandButtonAtMapsVisibleButtons(t *testing.T) {
 		t.Fatalf("first action = %q, want start", got)
 	}
 
-	zoomX := len("Actions [Start] [Attach] [Resume] [Exec] ")
+	zoomX := len("Actions [Start] [Attach] [Resume] [Exec] [Cancel] ")
 	if got := model.commandButtonAt(zoomX); got != "zoom" {
 		t.Fatalf("zoom action = %q, want zoom", got)
 	}
@@ -247,6 +258,54 @@ func TestActionEnvPinsCouncilHome(t *testing.T) {
 	env := strings.Join(model.actionEnv(), "\n")
 	if !strings.Contains(env, "MAESTRO_COUNCIL_HOME=/tmp/fresh/council-out") {
 		t.Fatalf("env missing council home:\n%s", env)
+	}
+}
+
+func TestCancelActionSendsCtrlCToSelectedRunOrchestrator(t *testing.T) {
+	runner := &fakeTmuxRunner{}
+	model := New(Options{Home: "/tmp/project/council-out", Workspace: "/tmp/project"})
+	model.tmux = tmux.Client{Runner: runner}
+	model.runs = []protocol.Run{{
+		ID:        "20260522-120000-1",
+		Workspace: "/work",
+		Instance:  "blue",
+	}}
+	model.panes = []tmux.Pane{
+		{ID: "%1", Role: "codex", Instance: "blue", Workspace: "/work"},
+		{ID: "%2", Label: "council-orchestrator-blue", Role: "orchestrator", Instance: "blue", Workspace: "/work"},
+	}
+
+	_, cmd := model.triggerAction("cancel")
+	if cmd == nil {
+		t.Fatal("cancel should return a command")
+	}
+	msg := cmd()
+	done, ok := msg.(actionDoneMsg)
+	if !ok {
+		t.Fatalf("message = %#v", msg)
+	}
+	if done.err != nil {
+		t.Fatal(done.err)
+	}
+	if len(runner.calls) != 1 || runner.calls[0] != "tmux send-keys -t %2 C-c" {
+		t.Fatalf("calls = %#v", runner.calls)
+	}
+}
+
+func TestCancelActionUsesFocusedOrchestratorPane(t *testing.T) {
+	model := New(Options{Home: "/tmp/project/council-out", Workspace: "/tmp/project"})
+	model.focus = "panes"
+	model.selectedPaneIndex = 0
+	model.panes = []tmux.Pane{
+		{ID: "%9", Role: "orchestrator", Instance: "feature", Workspace: "/other"},
+	}
+
+	pane, ok := model.orchestratorPane()
+	if !ok {
+		t.Fatal("orchestrator pane missing")
+	}
+	if pane.ID != "%9" {
+		t.Fatalf("pane ID = %q, want %%9", pane.ID)
 	}
 }
 

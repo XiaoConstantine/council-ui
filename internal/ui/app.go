@@ -141,6 +141,7 @@ var commandButtons = []commandButton{
 	{Label: "Attach", Action: "attach"},
 	{Label: "Resume", Action: "resume"},
 	{Label: "Exec", Action: "exec"},
+	{Label: "Cancel", Action: "cancel"},
 	{Label: "Zoom", Action: "zoom"},
 	{Label: "Reset", Action: "reset"},
 	{Label: "Refresh", Action: "refresh"},
@@ -335,6 +336,8 @@ func (m Model) updateDashboardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.triggerAction("resume")
 	case "e":
 		return m.triggerAction("exec")
+	case "c":
+		return m.triggerAction("cancel")
 	case "s":
 		return m.triggerAction("start")
 	case "a":
@@ -570,6 +573,13 @@ func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 			m.zoomKind = "artifact"
 			m.zoomScroll = 0
 		}
+	case "cancel":
+		pane, ok := m.orchestratorPane()
+		if !ok {
+			m.status = "no orchestrator pane to cancel"
+			return m, nil
+		}
+		return m, m.cancelCmd(pane)
 	case "reset":
 		m.confirmReset = true
 	case "refresh":
@@ -608,6 +618,17 @@ func (m Model) actionEnv() []string {
 		env = append(env, "MAESTRO_COUNCIL_HOME="+m.opts.Home)
 	}
 	return env
+}
+
+func (m Model) cancelCmd(pane tmux.Pane) tea.Cmd {
+	return func() tea.Msg {
+		err := m.tmux.SendKeys(context.Background(), pane.ID, "C-c")
+		output := ""
+		if err == nil {
+			output = "sent Ctrl-C to " + paneDisplayName(pane)
+		}
+		return actionDoneMsg{action: "cancel", output: output, err: err}
+	}
 }
 
 func (m Model) councilCommandForAction(action string) (councilCommand, bool) {
@@ -1099,7 +1120,7 @@ func (m Model) paneDetailControlView(width, height int) string {
 	if pane.Workspace != "" {
 		b.WriteString(fmt.Sprintf("Workspace: %s\n", truncate(pane.Workspace, width-11)))
 	}
-	b.WriteString(mutedStyle.Render(truncate("Press a to select this pane in tmux; z zooms captured output.", width)))
+	b.WriteString(mutedStyle.Render(truncate("Press a to select this pane in tmux; c cancels via the orchestrator; z zooms output.", width)))
 	b.WriteString("\n\n")
 	if len(m.actionLog) > 0 {
 		b.WriteString(sectionTitle.Render("Action Log"))
@@ -1143,6 +1164,7 @@ func (m Model) footerControlView() string {
 		keyStyle.Render("z") + " zoom",
 		keyStyle.Render("r") + " resume",
 		keyStyle.Render("e") + " exec",
+		keyStyle.Render("c") + " cancel",
 		keyStyle.Render("s") + " start",
 		keyStyle.Render("a") + " attach/select pane",
 		keyStyle.Render("R") + " reset",
@@ -1755,6 +1777,30 @@ func (m Model) currentPane() *tmux.Pane {
 		return nil
 	}
 	return &panes[m.selectedPaneIndex]
+}
+
+func (m Model) orchestratorPane() (tmux.Pane, bool) {
+	if m.focus == "panes" {
+		if pane := m.currentPane(); pane != nil && pane.Role == "orchestrator" {
+			return *pane, true
+		}
+	}
+
+	instance := m.currentInstance()
+	workspace := m.currentWorkspace()
+	for _, pane := range m.panes {
+		if pane.Role == "orchestrator" && pane.Instance == instance {
+			if workspace == "" || pane.Workspace == "" || samePath(pane.Workspace, workspace) {
+				return pane, true
+			}
+		}
+	}
+	for _, pane := range m.panes {
+		if pane.Role == "orchestrator" && pane.Instance == instance {
+			return pane, true
+		}
+	}
+	return tmux.Pane{}, false
 }
 
 func (m Model) currentArtifact() *artifactRow {

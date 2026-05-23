@@ -182,6 +182,26 @@ func (c Client) SelectPane(ctx context.Context, pane Pane) error {
 	return err
 }
 
+func (c Client) SendKeys(ctx context.Context, paneID string, keys ...string) error {
+	if paneID == "" {
+		return errors.New("pane id is empty")
+	}
+	if len(keys) == 0 {
+		return errors.New("keys are empty")
+	}
+
+	runner := c.Runner
+	if runner == nil {
+		runner = ExecRunner{}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	args := append([]string{"send-keys", "-t", paneID}, keys...)
+	_, err := runner.Run(ctx, "tmux", args...)
+	return err
+}
+
 func ParseCouncilLabel(label string) (role string, instance string) {
 	switch {
 	case label == "council-codex":
