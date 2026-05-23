@@ -18,8 +18,8 @@ orchestrator. The main job is to answer:
 - Fast filtering across task text, run id, workspace, instance, and stage.
 - Startup should ask which project to inspect instead of assuming the current
   repo is the council workspace.
-- Plan, execution, reviews, and progress should be expandable sections so
-  historical runs remain inspectable without live panes.
+- Runs, artifacts, and panes should be first-class selectable regions so the UI
+  feels like a control surface rather than a report browser.
 - Pane previews that are useful but never treated as source of truth.
 
 ## Near-Term Improvements
@@ -29,7 +29,7 @@ orchestrator. The main job is to answer:
 - Show run-list timestamps and sort mode, with toggles for updated time, status,
   workspace, and active panes.
 - Add contextual `?` help and an action palette for discoverability.
-- Expand the artifact modal into an artifact browser with search, file picker,
+- Expand the zoom view into an artifact browser with search, file picker,
   copy path, and open-in-editor actions.
 - Improve live pane preview cleanup and truncation.
 - Add structured `events.jsonl` support when `maestro-council` produces it.

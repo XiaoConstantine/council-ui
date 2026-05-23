@@ -36,36 +36,73 @@ type councilCommand struct {
 	Args      []string
 }
 
+type artifactRow struct {
+	Key          string
+	Label        string
+	RelativePath string
+	Path         string
+	Exists       bool
+	Bytes        int64
+}
+
+type uiLayout struct {
+	headerHeight      int
+	leftWidth         int
+	leftOuterWidth    int
+	rightWidth        int
+	mainHeight        int
+	sideHeight        int
+	runBlockHeight    int
+	runRows           int
+	runFirstRowY      int
+	paneBlockHeight   int
+	paneRows          int
+	paneFirstRowY     int
+	artifactRows      int
+	artifactFirstRowY int
+}
+
 type Model struct {
-	opts            Options
-	tmux            tmux.Client
-	choosingProject bool
-	projects        []protocol.Project
-	selectedProject int
-	runs            []protocol.Run
-	councils        []tmux.Council
-	panes           []tmux.Pane
-	selectedRun     int
-	runScroll       int
-	selectedAgent   int
-	selectedSection int
-	artifactScroll  int
-	artifactModal   bool
-	modalScroll     int
-	confirmReset    bool
-	actionLog       []string
-	expanded        map[string]bool
-	width           int
-	height          int
-	filter          string
-	filtering       bool
-	preview         string
-	previewErr      error
-	err             error
-	projectErr      error
-	tmuxErr         error
-	status          string
-	loadedAt        time.Time
+	opts                  Options
+	tmux                  tmux.Client
+	choosingProject       bool
+	projects              []protocol.Project
+	selectedProject       int
+	runs                  []protocol.Run
+	councils              []tmux.Council
+	panes                 []tmux.Pane
+	selectedRun           int
+	runScroll             int
+	focus                 string
+	selectedArtifactIndex int
+	selectedPaneIndex     int
+	artifactListScroll    int
+	paneScroll            int
+	selectedAgent         int
+	selectedSection       int
+	artifactScroll        int
+	artifactModal         bool
+	modalScroll           int
+	zoom                  bool
+	zoomKind              string
+	zoomScroll            int
+	panePreview           []string
+	panePreviewErr        string
+	panePreviewFor        string
+	confirmReset          bool
+	actionLog             []string
+	expanded              map[string]bool
+	width                 int
+	height                int
+	filter                string
+	filtering             bool
+	preview               string
+	previewErr            error
+	err                   error
+	projectErr            error
+	tmuxErr               error
+	status                string
+	loadedAt              time.Time
 }
 
 type projectsMsg struct {
@@ -78,6 +115,7 @@ type refreshMsg struct {
 	councils   []tmux.Council
 	panes      []tmux.Pane
 	preview    string
+	previewFor string
 	previewErr error
 	err        error
 	tmuxErr    error
@@ -115,10 +153,13 @@ func New(opts Options) Model {
 		opts.CouncilCmd = "council"
 	}
 	return Model{
-		opts:            opts,
-		tmux:            tmux.Client{},
-		choosingProject: opts.Home == "",
-		selectedAgent:   0,
+		opts:                  opts,
+		tmux:                  tmux.Client{},
+		choosingProject:       opts.Home == "",
+		focus:                 "runs",
+		selectedArtifactIndex: -1,
+		selectedPaneIndex:     -1,
+		selectedAgent:         0,
 		expanded: map[string]bool{
 			"plan":      true,
 			"execution": true,
@@ -158,13 +199,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.panes = msg.panes
 		m.preview = msg.preview
 		m.previewErr = msg.previewErr
+		m.panePreview = strings.Split(strings.ReplaceAll(msg.preview, "\r\n", "\n"), "\n")
+		m.panePreviewFor = msg.previewFor
+		m.panePreviewErr = ""
+		if msg.previewErr != nil {
+			m.panePreviewErr = msg.previewErr.Error()
+		}
 		m.err = msg.err
 		m.tmuxErr = msg.tmuxErr
 		m.loadedAt = msg.loadedAt
 		if m.selectedRun >= len(m.visibleRuns()) {
 			m.selectedRun = max(0, len(m.visibleRuns())-1)
 		}
-		m.keepRunVisible()
+		m.reconcileSelections()
 		return m, nil
 	case switchMsg:
 		if msg.err != nil {
@@ -192,8 +239,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.choosingProject {
 			return m.updateProjectPicker(msg)
 		}
-		if m.artifactModal {
-			return m.updateArtifactModal(msg)
+		if m.zoom {
+			return m.updateZoomKey(msg)
 		}
 		if m.filtering {
 			return m.updateFilter(msg)
@@ -211,99 +258,101 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		switch msg.String() {
-		case "ctrl+c", "q":
-			return m, tea.Quit
-		case "j", "down":
-			if m.selectedRun < len(m.visibleRuns())-1 {
-				m.selectRun(m.selectedRun + 1)
-				m.artifactScroll = 0
-			}
-			return m, m.refreshCmd()
-		case "k", "up":
-			if m.selectedRun > 0 {
-				m.selectRun(m.selectedRun - 1)
-				m.artifactScroll = 0
-			}
-			return m, m.refreshCmd()
-		case "g":
-			m.selectRun(0)
-			m.artifactScroll = 0
-			return m, m.refreshCmd()
-		case "G":
-			m.selectRun(len(m.visibleRuns()) - 1)
-			m.artifactScroll = 0
-			return m, m.refreshCmd()
-		case "tab":
-			m.selectedAgent = (m.selectedAgent + 1) % len(agentOrder)
-			m.artifactScroll = 0
-			return m, m.refreshCmd()
-		case "shift+tab":
-			m.selectedAgent--
-			if m.selectedAgent < 0 {
-				m.selectedAgent = len(agentOrder) - 1
-			}
-			m.artifactScroll = 0
-			return m, m.refreshCmd()
-		case "right", "l":
-			m.selectedSection = min(m.selectedSection+1, len(sectionOrder)-1)
-			m.artifactScroll = 0
-			return m, nil
-		case "left", "h":
-			m.selectedSection = max(0, m.selectedSection-1)
-			m.artifactScroll = 0
-			return m, nil
-		case "pgdown", "ctrl+d":
-			m.artifactScroll += 10
-			return m, nil
-		case "pgup", "ctrl+u":
-			m.artifactScroll = max(0, m.artifactScroll-10)
-			return m, nil
-		case "home":
-			m.artifactScroll = 0
-			return m, nil
-		case "end":
-			m.artifactScroll = 1 << 30
-			return m, nil
-		case "o", "z":
-			m.artifactModal = true
-			m.modalScroll = m.artifactScroll
-			return m, nil
-		case " ":
-			section := sectionOrder[m.selectedSection]
-			m.expanded[section] = !m.expanded[section]
-			return m, nil
-		case "enter":
-			pane, ok := m.selectedPane()
-			if !ok {
-				m.status = "no live pane for selection"
-				return m, nil
-			}
-			return m, m.switchCmd(pane)
-		case "a":
-			return m.triggerAction("attach")
-		case "s":
-			return m.triggerAction("start")
-		case "u":
-			return m.triggerAction("resume")
-		case "e":
-			return m.triggerAction("exec")
-		case "R":
-			return m.triggerAction("reset")
-		case "ctrl+r":
-			return m.triggerAction("refresh")
-		case "r":
-			return m, m.refreshCmd()
-		case "P":
-			m.choosingProject = true
-			m.status = ""
-			return m, m.discoverProjectsCmd()
-		case "/":
-			m.filtering = true
-			return m, nil
-		}
+		return m.updateDashboardKey(msg)
 	case tea.MouseMsg:
 		return m.updateMouse(msg)
+	}
+	return m, nil
+}
+
+func (m Model) updateZoomKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "esc", "z", "o":
+		m.zoom = false
+		m.zoomKind = ""
+		m.zoomScroll = 0
+	case "j", "down":
+		m.zoomScroll++
+	case "k", "up":
+		m.zoomScroll = max(0, m.zoomScroll-1)
+	case "pgdown", "ctrl+d", " ":
+		m.zoomScroll += max(1, m.height-6)
+	case "pgup", "ctrl+u":
+		m.zoomScroll = max(0, m.zoomScroll-max(1, m.height-6))
+	case "g", "home":
+		m.zoomScroll = 0
+	case "G", "end":
+		m.zoomScroll = 1 << 30
+	}
+	return m, nil
+}
+
+func (m Model) updateDashboardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "q":
+		return m, tea.Quit
+	case "tab":
+		m.focus = nextFocus(m.focus)
+	case "/":
+		m.filtering = true
+	case "r":
+		return m.triggerAction("resume")
+	case "e":
+		return m.triggerAction("exec")
+	case "s":
+		return m.triggerAction("start")
+	case "a":
+		return m.triggerAction("attach")
+	case "R":
+		return m.triggerAction("reset")
+	case "z", "o", "enter":
+		return m.triggerAction("zoom")
+	case "ctrl+r":
+		return m.triggerAction("refresh")
+	case "P":
+		m.choosingProject = true
+		m.status = ""
+		return m, m.discoverProjectsCmd()
+	case "j", "down":
+		if m.focus == "runs" {
+			m.selectRun(m.selectedRun + 1)
+			return m, m.refreshCmd()
+		}
+		if m.focus == "panes" {
+			m.selectPane(m.selectedPaneIndex + 1)
+			return m, m.refreshCmd()
+		}
+		m.selectArtifact(m.selectedArtifactIndex + 1)
+	case "k", "up":
+		if m.focus == "runs" {
+			m.selectRun(m.selectedRun - 1)
+			return m, m.refreshCmd()
+		}
+		if m.focus == "panes" {
+			m.selectPane(m.selectedPaneIndex - 1)
+			return m, m.refreshCmd()
+		}
+		m.selectArtifact(m.selectedArtifactIndex - 1)
+	case "g":
+		if m.focus == "runs" {
+			m.selectRun(0)
+			return m, m.refreshCmd()
+		}
+		if m.focus == "panes" {
+			m.selectPane(0)
+			return m, m.refreshCmd()
+		}
+		m.selectArtifact(0)
+	case "G":
+		if m.focus == "runs" {
+			m.selectRun(len(m.visibleRuns()) - 1)
+			return m, m.refreshCmd()
+		}
+		if m.focus == "panes" {
+			m.selectPane(len(m.visiblePanes()) - 1)
+			return m, m.refreshCmd()
+		}
+		m.selectArtifact(len(m.visibleArtifacts()) - 1)
 	}
 	return m, nil
 }
@@ -406,27 +455,23 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.Button == tea.MouseButtonWheelUp {
-		if m.artifactModal {
-			m.modalScroll = max(0, m.modalScroll-3)
-		} else {
-			m.artifactScroll = max(0, m.artifactScroll-3)
+		if m.zoom {
+			m.zoomScroll = max(0, m.zoomScroll-3)
 		}
 		return m, nil
 	}
 	if msg.Button == tea.MouseButtonWheelDown {
-		if m.artifactModal {
-			m.modalScroll += 3
-		} else {
-			m.artifactScroll += 3
+		if m.zoom {
+			m.zoomScroll += 3
 		}
 		return m, nil
 	}
 	if msg.Button != tea.MouseButtonLeft {
 		return m, nil
 	}
-	if m.artifactModal {
-		m.artifactModal = false
-		m.artifactScroll = m.modalScroll
+	if m.zoom {
+		m.zoom = false
+		m.zoomScroll = 0
 		return m, nil
 	}
 	if msg.Y == 1 {
@@ -435,22 +480,30 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	topHeight := lipgloss.Height(m.renderTop())
-	bodyY := msg.Y - topHeight
-	listWidth := clamp(38, 34, max(34, m.width/3))
-	if msg.X < listWidth && bodyY >= 1 {
-		visibleRows, hasRange := runListMetrics(max(8, m.height-topHeight-lipgloss.Height(m.renderBottom())), len(m.visibleRuns()))
-		offset := scrollForSelection(m.runScroll, m.selectedRun, len(m.visibleRuns()), visibleRows)
-		firstRowY := 1
-		if hasRange {
-			firstRowY = 2
-		}
-		row := (bodyY - firstRowY) / 3
-		if bodyY >= firstRowY && row >= 0 && row < visibleRows && offset+row < len(m.visibleRuns()) {
-			m.selectRun(offset + row)
-			m.artifactScroll = 0
+	layout := m.layout()
+	if msg.X < layout.leftOuterWidth {
+		runOffset := scrollForSelection(m.runScroll, m.selectedRun, len(m.visibleRuns()), layout.runRows)
+		idx := msg.Y - layout.runFirstRowY
+		if idx >= 0 && idx < layout.runRows && runOffset+idx < len(m.visibleRuns()) {
+			m.focus = "runs"
+			m.selectRun(runOffset + idx)
 			return m, m.refreshCmd()
 		}
+		paneOffset := scrollForSelection(m.paneScroll, m.selectedPaneIndex, len(m.visiblePanes()), layout.paneRows)
+		idx = msg.Y - layout.paneFirstRowY
+		if idx >= 0 && idx < layout.paneRows && paneOffset+idx < len(m.visiblePanes()) {
+			m.focus = "panes"
+			m.selectPane(paneOffset + idx)
+			return m, m.refreshCmd()
+		}
+		return m, nil
+	}
+
+	artifactOffset := scrollForSelection(m.artifactListScroll, m.selectedArtifactIndex, len(m.visibleArtifacts()), layout.artifactRows)
+	idx := msg.Y - layout.artifactFirstRowY
+	if idx >= 0 && idx < layout.artifactRows && artifactOffset+idx < len(m.visibleArtifacts()) {
+		m.focus = "artifacts"
+		m.selectArtifact(artifactOffset + idx)
 	}
 	return m, nil
 }
@@ -458,16 +511,25 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 	switch action {
 	case "attach":
-		if pane, ok := m.selectedPane(); ok {
-			return m, m.switchCmd(pane)
+		if m.focus == "panes" {
+			if pane := m.currentPane(); pane != nil {
+				return m, m.switchCmd(*pane)
+			}
 		}
 		if cmd, ok := m.councilCommandForAction(action); ok {
 			return m, m.actionCmd(cmd)
 		}
 		m.status = "no live pane or council instance to attach"
 	case "zoom":
-		m.artifactModal = true
-		m.modalScroll = m.artifactScroll
+		if m.focus == "panes" && m.currentPane() != nil {
+			m.zoom = true
+			m.zoomKind = "pane"
+			m.zoomScroll = 0
+		} else if m.currentArtifact() != nil {
+			m.zoom = true
+			m.zoomKind = "artifact"
+			m.zoomScroll = 0
+		}
 	case "reset":
 		m.confirmReset = true
 	case "refresh":
@@ -537,24 +599,17 @@ func (m Model) View() string {
 		body := projectBox.Width(m.width).Height(bodyHeight).Render(m.renderProjectPicker(m.width, bodyHeight))
 		return lipgloss.JoinVertical(lipgloss.Left, top, body, bottom)
 	}
-	if m.artifactModal {
-		return m.renderArtifactModal(m.width, m.height)
+	if m.zoom {
+		return m.zoomView()
 	}
 
-	top := m.renderTop()
-	bottom := m.renderBottom()
-	bodyHeight := max(8, m.height-lipgloss.Height(top)-lipgloss.Height(bottom))
-	listWidth := clamp(38, 34, max(34, m.width/3))
-	detailWidth := max(40, m.width-listWidth-1)
+	header := m.headerBlockWithStateView()
+	layout := m.layoutForHeader(header)
 
-	left := listBox.Width(listWidth).Height(bodyHeight).Render(m.renderRunList(listWidth, bodyHeight))
-	right := lipgloss.JoinVertical(
-		lipgloss.Left,
-		detailBox.Width(detailWidth).Height(max(12, bodyHeight/2)).Render(m.renderDetail(detailWidth, max(12, bodyHeight/2))),
-		previewBox.Width(detailWidth).Height(max(8, bodyHeight-max(12, bodyHeight/2)-1)).Render(m.renderPreview(detailWidth, max(8, bodyHeight-max(12, bodyHeight/2)-1))),
-	)
+	left := borderStyle.Width(layout.leftWidth).Height(layout.mainHeight).Render(m.sideView(layout.leftWidth-2, layout.sideHeight))
+	right := borderStyle.Width(layout.rightWidth).Height(layout.mainHeight).Render(m.detailControlView(layout.rightWidth-2, layout.sideHeight))
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	return lipgloss.JoinVertical(lipgloss.Left, top, body, bottom)
+	return lipgloss.JoinVertical(lipgloss.Left, header, body, m.footerControlView())
 }
 
 func (m Model) refreshCmd() tea.Cmd {
@@ -570,12 +625,24 @@ func (m Model) refreshCmd() tea.Cmd {
 		next.panes = panes
 		preview := ""
 		var previewErr error
-		if pane, ok := next.selectedPane(); ok {
+		next.reconcileSelections()
+		if pane := next.currentPane(); pane != nil {
 			capture, captureErr := client.CapturePane(context.Background(), pane.ID, 120)
 			if captureErr == nil {
 				preview = capture
 			} else {
 				previewErr = captureErr
+			}
+			return refreshMsg{
+				runs:       runs,
+				councils:   councils,
+				panes:      panes,
+				preview:    preview,
+				previewFor: pane.ID,
+				previewErr: previewErr,
+				err:        err,
+				tmuxErr:    tmuxErr,
+				loadedAt:   time.Now(),
 			}
 		}
 
@@ -609,6 +676,78 @@ func tick(refresh time.Duration) tea.Cmd {
 	return tea.Tick(refresh, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
+func (m Model) headerControlView() string {
+	health := okStyle.Render("tmux idle")
+	if len(m.panes) > 0 {
+		health = okStyle.Render(fmt.Sprintf("%d pane(s)", len(m.panes)))
+	}
+	parts := []string{
+		titleStyle.Render("council-ui"),
+		"workspace " + mutedStyle.Render(m.currentWorkspace()),
+		"instance " + keyStyle.Render(m.currentInstance()),
+		health,
+	}
+	return truncate(strings.Join(parts, "  "), m.width)
+}
+
+func (m Model) headerBlockView() string {
+	return m.headerControlView() + "\n" + m.renderCommandBar()
+}
+
+func (m Model) headerBlockWithStateView() string {
+	header := m.headerBlockView()
+	if m.filtering {
+		header += "\n" + keyStyle.Render("filter: ") + m.filter
+	}
+	if m.confirmReset {
+		header += "\n" + warnStyle.Render("Reset selected instance? y/N")
+	}
+	if m.status != "" {
+		header += "\n" + mutedStyle.Render(m.status)
+	}
+	if m.err != nil {
+		header += "\n" + failStyle.Render(m.err.Error())
+	}
+	if m.tmuxErr != nil {
+		header += "\n" + warnStyle.Render("tmux: "+m.tmuxErr.Error())
+	}
+	return header
+}
+
+func (m Model) layout() uiLayout {
+	return m.layoutForHeader(m.headerBlockWithStateView())
+}
+
+func (m Model) layoutForHeader(header string) uiLayout {
+	headerHeight := lipgloss.Height(header)
+	leftWidth := max(34, m.width/3)
+	rightWidth := max(40, m.width-leftWidth-3)
+	mainHeight := max(12, m.height-headerHeight-5)
+	sideHeight := max(1, mainHeight-2)
+	runBlockHeight := max(4, sideHeight/2)
+	if sideHeight > 4 && runBlockHeight > sideHeight-4 {
+		runBlockHeight = sideHeight - 4
+	}
+	runBlockHeight = max(2, min(runBlockHeight, sideHeight))
+	paneBlockHeight := max(1, sideHeight-runBlockHeight-1)
+	return uiLayout{
+		headerHeight:      headerHeight,
+		leftWidth:         leftWidth,
+		leftOuterWidth:    leftWidth + 2,
+		rightWidth:        rightWidth,
+		mainHeight:        mainHeight,
+		sideHeight:        sideHeight,
+		runBlockHeight:    runBlockHeight,
+		runRows:           listRowsForBlock(runBlockHeight),
+		runFirstRowY:      headerHeight + 2,
+		paneBlockHeight:   paneBlockHeight,
+		paneRows:          listRowsForBlock(paneBlockHeight),
+		paneFirstRowY:     headerHeight + runBlockHeight + 2,
+		artifactRows:      max(1, sideHeight/3),
+		artifactFirstRowY: headerHeight + 10,
+	}
+}
+
 func (m Model) renderTop() string {
 	live := fmt.Sprintf("%d live panes", len(m.panes))
 	if m.tmuxErr != nil {
@@ -627,7 +766,7 @@ func (m Model) renderTop() string {
 }
 
 func (m Model) renderCommandBar() string {
-	return commandBar.Width(m.width).Render("Actions " + m.commandBarPlain())
+	return commandBar.Width(m.width).Render(truncate("Actions "+m.commandBarPlain(), m.width))
 }
 
 func (m Model) commandBarPlain() string {
@@ -721,6 +860,222 @@ func (m Model) renderProjectPicker(width, height int) string {
 	}
 
 	return strings.Join(fitLines(lines, height-1), "\n")
+}
+
+func (m Model) sideView(width, height int) string {
+	runHeight := max(4, height/2)
+	if height > 4 && runHeight > height-4 {
+		runHeight = height - 4
+	}
+	runHeight = max(2, min(runHeight, height))
+	paneHeight := max(1, height-runHeight-1)
+	runBlock := fitStringLines(m.runsControlView(width, runHeight), runHeight)
+	paneBlock := fitStringLines(m.panesControlView(width, paneHeight), paneHeight)
+	return runBlock + "\n" + paneBlock
+}
+
+func (m Model) runsControlView(width, height int) string {
+	var b strings.Builder
+	runs := m.visibleRuns()
+	limit := listRowsForBlock(height)
+	offset := scrollForSelection(m.runScroll, m.selectedRun, len(runs), limit)
+	b.WriteString(sectionTitle.Render(listTitle("Runs", m.focus == "runs", offset, limit, len(runs))))
+	if m.filter != "" {
+		b.WriteString(" " + mutedStyle.Render("filter="+m.filter))
+	}
+	b.WriteString("\n")
+	if len(runs) == 0 {
+		b.WriteString(emptyStyle.Render(truncate("No council runs found.", width)))
+		return b.String()
+	}
+	idWidth := min(20, max(10, width/2))
+	statusWidth := 8
+	taskWidth := max(0, width-idWidth-statusWidth-3)
+	for row := 0; row < limit && offset+row < len(runs); row++ {
+		i := offset + row
+		run := runs[i]
+		line := fmt.Sprintf("%-*s %-*s %s",
+			idWidth,
+			truncate(run.ID, idWidth),
+			statusWidth,
+			truncate(rawStatusText(run.Status), statusWidth),
+			truncate(oneLine(run.Task), taskWidth),
+		)
+		if i == m.selectedRun {
+			line = selectedItemStyle.Render(pad(line, width))
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m Model) panesControlView(width, height int) string {
+	var b strings.Builder
+	panes := m.visiblePanes()
+	limit := listRowsForBlock(height)
+	offset := scrollForSelection(m.paneScroll, m.selectedPaneIndex, len(panes), limit)
+	b.WriteString(sectionTitle.Render(listTitle("Panes", m.focus == "panes", offset, limit, len(panes))))
+	b.WriteString("\n")
+	if len(panes) == 0 {
+		b.WriteString(emptyStyle.Render(truncate("No live council panes found.", width)))
+		return b.String()
+	}
+	processWidth := min(8, max(4, width/5))
+	sizeWidth := 7
+	nameWidth := max(8, width-processWidth-sizeWidth-4)
+	for row := 0; row < limit && offset+row < len(panes); row++ {
+		i := offset + row
+		pane := panes[i]
+		active := " "
+		if pane.Active {
+			active = "*"
+		}
+		line := fmt.Sprintf("%s %-*s %-*s %*s",
+			active,
+			nameWidth,
+			truncate(paneDisplayName(pane), nameWidth),
+			processWidth,
+			truncate(pane.Command, processWidth),
+			sizeWidth,
+			truncate(pane.Size, sizeWidth),
+		)
+		if i == m.selectedPaneIndex {
+			line = selectedItemStyle.Render(pad(line, width))
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m Model) detailControlView(width, height int) string {
+	if m.focus == "panes" {
+		return m.paneDetailControlView(width, height)
+	}
+	run, ok := m.selectedRunSnapshot()
+	if !ok {
+		return emptyStyle.Render(truncate("No run selected.", width))
+	}
+
+	var b strings.Builder
+	b.WriteString(sectionTitle.Render("Selected Run"))
+	b.WriteString("\n")
+	b.WriteString(fmt.Sprintf("Task: %s\n", truncate(oneLine(run.Task), width-6)))
+	b.WriteString(fmt.Sprintf("Run: %s\n", keyStyle.Render(run.ID)))
+	b.WriteString(fmt.Sprintf("Instance: %s\n", keyStyle.Render(run.Instance)))
+	b.WriteString(fmt.Sprintf("Status: %s  Phase: %s\n", statusBadge(run.Status), truncate(run.Phase, max(1, width-18))))
+	b.WriteString(fmt.Sprintf("Target: %s  Next: %s\n", truncate(run.Target, max(1, width/3)), keyStyle.Render(truncate(run.NextStage, max(1, width/2)))))
+	b.WriteString(fmt.Sprintf("Action: %s\n\n", keyStyle.Render(truncate(nextRunAction(run), max(1, width-8)))))
+
+	artifacts := m.visibleArtifacts()
+	artifactRows := min(max(1, height/3), len(artifacts))
+	artifactOffset := scrollForSelection(m.artifactListScroll, m.selectedArtifactIndex, len(artifacts), artifactRows)
+	b.WriteString(sectionTitle.Render(listTitle("Artifacts", m.focus == "artifacts", artifactOffset, artifactRows, len(artifacts))))
+	b.WriteString("\n")
+	for row := 0; row < artifactRows && artifactOffset+row < len(artifacts); row++ {
+		i := artifactOffset + row
+		artifact := artifacts[i]
+		markerText := "pending"
+		marker := mutedStyle.Render(markerText)
+		if artifact.Exists {
+			markerText = fmt.Sprintf("%dB", artifact.Bytes)
+			marker = okStyle.Render(markerText)
+		}
+		labelWidth := max(8, min(28, width-len(markerText)-1))
+		line := fmt.Sprintf("%-*s %s", labelWidth, truncate(artifact.Label, labelWidth), marker)
+		if i == m.selectedArtifactIndex {
+			line = selectedItemStyle.Render(pad(line, width))
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(sectionTitle.Render("Preview"))
+	b.WriteString("\n")
+	preview := m.previewLines(max(1, height-lipgloss.Height(b.String())-2), width)
+	if len(preview) == 0 {
+		b.WriteString(emptyStyle.Render(truncate("Select an existing artifact and press z to zoom.", width)))
+	} else {
+		b.WriteString(strings.Join(preview, "\n"))
+	}
+
+	if len(m.actionLog) > 0 {
+		b.WriteString("\n\n")
+		b.WriteString(sectionTitle.Render("Action Log"))
+		b.WriteString("\n")
+		for _, line := range m.actionLog {
+			b.WriteString(truncate(line, width))
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+func (m Model) paneDetailControlView(width, height int) string {
+	pane := m.currentPane()
+	if pane == nil {
+		return emptyStyle.Render(truncate("No pane selected.", width))
+	}
+	var b strings.Builder
+	b.WriteString(sectionTitle.Render("Selected Pane"))
+	b.WriteString("\n")
+	b.WriteString(fmt.Sprintf("Name: %s  Target: %s\n", keyStyle.Render(paneDisplayName(*pane)), keyStyle.Render(pane.ID)))
+	b.WriteString(fmt.Sprintf("Window: %s:%s  Size: %s  Process: %s\n", pane.Session, pane.Index, pane.Size, pane.Command))
+	if pane.Workspace != "" {
+		b.WriteString(fmt.Sprintf("Workspace: %s\n", truncate(pane.Workspace, width-11)))
+	}
+	b.WriteString(mutedStyle.Render(truncate("Press a to select this pane in tmux; z zooms captured output.", width)))
+	b.WriteString("\n\n")
+	if len(m.actionLog) > 0 {
+		b.WriteString(sectionTitle.Render("Action Log"))
+		b.WriteString("\n")
+		for _, line := range m.actionLog[:min(2, len(m.actionLog))] {
+			b.WriteString(truncate(line, width))
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString(sectionTitle.Render("Pane Output"))
+	b.WriteString("\n")
+	if m.panePreviewErr != "" {
+		b.WriteString(warnStyle.Render(truncate(m.panePreviewErr, width)))
+		return b.String()
+	}
+	lines := m.panePreview
+	if len(lines) == 0 {
+		b.WriteString(emptyStyle.Render(truncate("No captured output.", width)))
+		return b.String()
+	}
+	limit := max(1, height-lipgloss.Height(b.String())-1)
+	if len(lines) > limit {
+		lines = lines[len(lines)-limit:]
+	}
+	for _, line := range lines {
+		b.WriteString(truncate(stripControlNoise(line), width))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m Model) footerControlView() string {
+	items := []string{
+		keyStyle.Render("j/k") + " move",
+		keyStyle.Render("tab") + " focus",
+		keyStyle.Render("click") + " select",
+		keyStyle.Render("z") + " zoom",
+		keyStyle.Render("r") + " resume",
+		keyStyle.Render("e") + " exec",
+		keyStyle.Render("s") + " start",
+		keyStyle.Render("a") + " attach/select pane",
+		keyStyle.Render("R") + " reset",
+		keyStyle.Render("/") + " filter",
+		keyStyle.Render("P") + " projects",
+		keyStyle.Render("ctrl+r") + " refresh",
+		keyStyle.Render("q") + " quit",
+	}
+	return footer.Width(m.width).Render(truncate(strings.Join(items, "  "), m.width))
 }
 
 func (m Model) renderRunList(width, height int) string {
@@ -1200,10 +1555,17 @@ func (m *Model) selectRun(index int) {
 	runs := m.visibleRuns()
 	if len(runs) == 0 {
 		m.selectedRun = 0
+		m.selectedArtifactIndex = -1
 		m.runScroll = 0
+		m.artifactListScroll = 0
 		return
 	}
+	if index != m.selectedRun {
+		m.selectedArtifactIndex = -1
+		m.artifactListScroll = 0
+	}
 	m.selectedRun = clamp(index, 0, len(runs)-1)
+	m.ensureArtifactSelection()
 	m.keepRunVisible()
 }
 
@@ -1211,11 +1573,10 @@ func (m *Model) keepRunVisible() {
 	if m.height == 0 {
 		return
 	}
-	topHeight := lipgloss.Height(m.renderTop())
-	bottomHeight := lipgloss.Height(m.renderBottom())
-	bodyHeight := max(8, m.height-topHeight-bottomHeight)
-	visibleRows, _ := runListMetrics(bodyHeight, len(m.visibleRuns()))
-	m.runScroll = scrollForSelection(m.runScroll, m.selectedRun, len(m.visibleRuns()), visibleRows)
+	layout := m.layout()
+	m.runScroll = scrollForSelection(m.runScroll, m.selectedRun, len(m.visibleRuns()), layout.runRows)
+	m.artifactListScroll = scrollForSelection(m.artifactListScroll, m.selectedArtifactIndex, len(m.visibleArtifacts()), layout.artifactRows)
+	m.paneScroll = scrollForSelection(m.paneScroll, m.selectedPaneIndex, len(m.visiblePanes()), layout.paneRows)
 }
 
 func (m Model) currentInstance() string {
@@ -1238,6 +1599,94 @@ func (m Model) currentWorkspace() string {
 		}
 	}
 	return ""
+}
+
+func (m *Model) reconcileSelections() {
+	if m.selectedRun >= len(m.visibleRuns()) {
+		m.selectedRun = len(m.visibleRuns()) - 1
+	}
+	if m.selectedRun < 0 && len(m.visibleRuns()) > 0 {
+		m.selectedRun = 0
+	}
+	m.ensureArtifactSelection()
+	m.ensurePaneSelection()
+	m.keepRunVisible()
+}
+
+func (m *Model) ensureArtifactSelection() {
+	artifacts := m.visibleArtifacts()
+	if len(artifacts) == 0 {
+		m.selectedArtifactIndex = -1
+		return
+	}
+	if m.selectedArtifactIndex < 0 || m.selectedArtifactIndex >= len(artifacts) {
+		for i, artifact := range artifacts {
+			if artifact.Exists {
+				m.selectedArtifactIndex = i
+				return
+			}
+		}
+		m.selectedArtifactIndex = 0
+	}
+}
+
+func (m *Model) ensurePaneSelection() {
+	panes := m.visiblePanes()
+	if len(panes) == 0 {
+		m.selectedPaneIndex = -1
+		m.panePreview = nil
+		m.panePreviewFor = ""
+		return
+	}
+	if m.selectedPaneIndex < 0 || m.selectedPaneIndex >= len(panes) {
+		for i, pane := range panes {
+			if pane.Active {
+				m.selectedPaneIndex = i
+				return
+			}
+		}
+		m.selectedPaneIndex = 0
+	}
+}
+
+func (m *Model) selectArtifact(index int) {
+	artifacts := m.visibleArtifacts()
+	if len(artifacts) == 0 {
+		m.selectedArtifactIndex = -1
+		m.artifactListScroll = 0
+		return
+	}
+	m.selectedArtifactIndex = clamp(index, 0, len(artifacts)-1)
+	m.keepRunVisible()
+}
+
+func (m *Model) selectPane(index int) {
+	panes := m.visiblePanes()
+	if len(panes) == 0 {
+		m.selectedPaneIndex = -1
+		m.paneScroll = 0
+		m.panePreview = nil
+		m.panePreviewFor = ""
+		return
+	}
+	m.selectedPaneIndex = clamp(index, 0, len(panes)-1)
+	m.keepRunVisible()
+}
+
+func (m Model) currentPane() *tmux.Pane {
+	panes := m.visiblePanes()
+	if len(panes) == 0 || m.selectedPaneIndex < 0 || m.selectedPaneIndex >= len(panes) {
+		return nil
+	}
+	return &panes[m.selectedPaneIndex]
+}
+
+func (m Model) currentArtifact() *artifactRow {
+	artifacts := m.visibleArtifacts()
+	if len(artifacts) == 0 || m.selectedArtifactIndex < 0 || m.selectedArtifactIndex >= len(artifacts) {
+		return nil
+	}
+	return &artifacts[m.selectedArtifactIndex]
 }
 
 func (m Model) selectedPane() (tmux.Pane, bool) {
@@ -1278,6 +1727,147 @@ func (m Model) visibleRuns() []protocol.Run {
 	return runs
 }
 
+func (m Model) visiblePanes() []tmux.Pane {
+	return m.panes
+}
+
+func (m Model) visibleArtifacts() []artifactRow {
+	run, ok := m.selectedRunSnapshot()
+	if !ok {
+		return nil
+	}
+	var out []artifactRow
+	for _, artifact := range artifactsForRun(run, m.opts.Load.MaxReviewRounds) {
+		if artifact.Exists || strings.HasPrefix(artifact.Key, "plan") || strings.HasPrefix(artifact.Key, "implementation") || strings.HasPrefix(artifact.Key, "reviews") {
+			out = append(out, artifact)
+		}
+	}
+	return out
+}
+
+func artifactsForRun(run protocol.Run, maxReviewRounds int) []artifactRow {
+	if maxReviewRounds <= 0 {
+		maxReviewRounds = protocol.DefaultMaxReviewRounds
+	}
+	artifact := func(key, label, rel string, exists bool) artifactRow {
+		path := filepath.Join(run.Dir, rel)
+		var bytes int64
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			bytes = info.Size()
+			exists = exists || bytes > 0
+		}
+		return artifactRow{
+			Key:          key,
+			Label:        label,
+			RelativePath: rel,
+			Path:         path,
+			Exists:       exists,
+			Bytes:        bytes,
+		}
+	}
+	rows := []artifactRow{
+		artifact("plans.codex", "codex plan", "plans/codex.md", run.Artifacts.Plans["codex"]),
+		artifact("plans.cc", "cc plan", "plans/cc.md", run.Artifacts.Plans["cc"]),
+		artifact("plans.amp", "amp plan", "plans/amp.md", run.Artifacts.Plans["amp"]),
+		artifact("critiques.codex", "codex critique", "critiques/codex.md", run.Artifacts.Critiques["codex"]),
+		artifact("critiques.cc", "cc critique", "critiques/cc.md", run.Artifacts.Critiques["cc"]),
+		artifact("critiques.amp", "amp critique", "critiques/amp.md", run.Artifacts.Critiques["amp"]),
+		artifact("plan.final", "final plan", "plan.final.md", run.Artifacts.FinalPlan),
+		artifact("implementation.codex", "implementation note", "implementation/codex.md", run.Artifacts.Implementation),
+	}
+	for round := 1; round <= maxReviewRounds; round++ {
+		revisionExists := false
+		for _, revisionRound := range run.Artifacts.RevisionRounds {
+			if revisionRound == round {
+				revisionExists = true
+				break
+			}
+		}
+		rows = append(rows, artifact(
+			fmt.Sprintf("implementation.revise_round_%d", round),
+			fmt.Sprintf("revision round %d", round),
+			fmt.Sprintf("implementation/codex.revise-round-%d.md", round),
+			revisionExists,
+		))
+		ccExists, ampExists := false, false
+		for _, reviewRound := range run.Artifacts.ReviewRounds {
+			if reviewRound.Round == round {
+				ccExists = reviewRound.CC
+				ampExists = reviewRound.AMP
+			}
+		}
+		rows = append(rows,
+			artifact(fmt.Sprintf("reviews.cc.round_%d", round), fmt.Sprintf("cc review round %d", round), fmt.Sprintf("reviews/cc.round-%d.md", round), ccExists),
+			artifact(fmt.Sprintf("reviews.amp.round_%d", round), fmt.Sprintf("amp review round %d", round), fmt.Sprintf("reviews/amp.round-%d.md", round), ampExists),
+		)
+	}
+	return rows
+}
+
+func (m Model) previewLines(limit, width int) []string {
+	artifact := m.currentArtifact()
+	if artifact == nil || !artifact.Exists {
+		return nil
+	}
+	lines := readArtifactLines(*artifact)
+	if len(lines) > limit {
+		lines = lines[:limit]
+	}
+	for i := range lines {
+		lines[i] = truncate(lines[i], width)
+	}
+	return lines
+}
+
+func readArtifactLines(artifact artifactRow) []string {
+	if !artifact.Exists {
+		return []string{"Artifact is pending."}
+	}
+	data, err := os.ReadFile(artifact.Path)
+	if err != nil {
+		return []string{err.Error()}
+	}
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		return []string{emptyStyle.Render("empty artifact")}
+	}
+	return lines
+}
+
+func (m Model) zoomView() string {
+	title := "Zoom"
+	var lines []string
+	switch m.zoomKind {
+	case "pane":
+		pane := m.currentPane()
+		if pane == nil {
+			lines = []string{"No pane selected."}
+		} else {
+			title = "Zoom: " + paneDisplayName(*pane) + "  " + pane.ID
+			lines = m.panePreview
+			if m.panePreviewErr != "" {
+				lines = []string{m.panePreviewErr}
+			}
+		}
+	default:
+		artifact := m.currentArtifact()
+		if artifact == nil {
+			lines = []string{"No artifact selected."}
+		} else {
+			title = "Zoom: " + artifact.Label + "  " + artifact.Path
+			lines = readArtifactLines(*artifact)
+		}
+	}
+	bodyHeight := max(1, m.height-3)
+	if m.zoomScroll > max(0, len(lines)-1) {
+		m.zoomScroll = max(0, len(lines)-1)
+	}
+	end := min(len(lines), m.zoomScroll+bodyHeight)
+	body := strings.Join(lines[m.zoomScroll:end], "\n")
+	header := titleStyle.Render(truncate(title, max(20, m.width-2))) + "\n" + mutedStyle.Render("q/esc/z exits, j/k scroll, click exits")
+	return header + "\n" + body
+}
+
 func flattenPanes(councils []tmux.Council) []tmux.Pane {
 	var panes []tmux.Pane
 	for _, council := range councils {
@@ -1298,6 +1888,41 @@ func statusBadge(status string) string {
 		return mutedStyle.Render("PENDING")
 	default:
 		return subtleStyle.Render(strings.ToUpper(status))
+	}
+}
+
+func rawStatusText(status string) string {
+	if status == "" {
+		return "UNKNOWN"
+	}
+	return strings.ToUpper(status)
+}
+
+func nextRunAction(run protocol.Run) string {
+	if strings.EqualFold(run.Status, "SUCCESS") || run.NextStage == "complete" {
+		return "complete"
+	}
+	return "council resume " + run.ID
+}
+
+func paneDisplayName(pane tmux.Pane) string {
+	if pane.Label != "" {
+		return pane.Label
+	}
+	if pane.Window != "" {
+		return pane.Window
+	}
+	return pane.ID
+}
+
+func nextFocus(focus string) string {
+	switch focus {
+	case "runs":
+		return "artifacts"
+	case "artifacts":
+		return "panes"
+	default:
+		return "runs"
 	}
 }
 
@@ -1369,6 +1994,13 @@ func truncate(value string, width int) string {
 	return string(runes[:width-1]) + "…"
 }
 
+func pad(value string, width int) string {
+	if lipgloss.Width(value) >= width {
+		return value
+	}
+	return value + strings.Repeat(" ", width-lipgloss.Width(value))
+}
+
 func fitLines(lines []string, height int) []string {
 	if height <= 0 {
 		return nil
@@ -1377,6 +2009,20 @@ func fitLines(lines []string, height int) []string {
 		return lines
 	}
 	return lines[:height]
+}
+
+func fitStringLines(value string, height int) string {
+	if height <= 0 {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(value, "\n"), "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func tailLines(value string, count int) []string {
@@ -1428,6 +2074,21 @@ func scrollLines(lines []string, offset int, height int) ([]string, int, int) {
 
 func runRowsForHeight(height int) int {
 	return max(1, (max(1, height-1))/3)
+}
+
+func listRowsForBlock(height int) int {
+	return max(1, height-1)
+}
+
+func listTitle(label string, focused bool, offset, limit, total int) string {
+	title := label
+	if focused {
+		title += " *"
+	}
+	if total > limit && limit > 0 {
+		title += fmt.Sprintf(" %d-%d/%d", offset+1, min(total, offset+limit), total)
+	}
+	return title
 }
 
 func runListMetrics(height, total int) (visibleRows int, hasRange bool) {
@@ -1529,12 +2190,16 @@ var (
 			Padding(0, 1).
 			Background(lipgloss.Color("236"))
 	commandBar = lipgloss.NewStyle().
-			Padding(0, 1).
 			Foreground(lipgloss.Color("110")).
 			Background(lipgloss.Color("235"))
+	borderStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color("240"))
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("230"))
+	keyStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("110"))
 	strongStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("230"))

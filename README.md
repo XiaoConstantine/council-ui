@@ -6,14 +6,14 @@ run artifacts on disk plus live tmux pane metadata. The existing shell runner
 continues to own orchestration, agent dispatch, resume, review rounds, and
 failure handling.
 
-The first version is a focused terminal dashboard:
+The first version is a focused terminal control surface:
 
 - scans `council-out/runs` for planning and execution progress
 - shows phase, target, next stage, missing artifacts, reviewer verdicts, and
   recent progress log entries
 - discovers live council panes from tmux labels
-- previews the selected agent pane with `tmux capture-pane`
-- switches to the selected live pane with `Enter` or the command bar
+- previews selected run artifacts and selected council pane output
+- switches to the selected live pane from the panes list
 - exposes clickable actions for start, attach, resume, exec, zoom, reset,
   refresh, and quit while keeping orchestration in `maestro-council`
 
@@ -78,21 +78,16 @@ Project picker:
 
 Dashboard:
 
-- `j` / `k`: move through runs
-- `g` / `G`: jump to first or last run
-- `h` / `l`: move through Plan, Execution, Reviews, and Progress sections
-- `Space`: expand or collapse the selected section
-- `Tab`: cycle codex, cc, amp, orchestrator pane preview
-- `o` / `z`: open the selected artifact in a modal viewer
-- `Ctrl+D` / `Ctrl+U`: scroll artifact preview down or up
-- `PageDown` / `PageUp`: scroll artifact preview down or up
-- `Enter`: switch tmux focus to the selected live pane
+- `Tab`: cycle Runs, Artifacts, and Panes focus
+- `j` / `k`: move within the focused list
+- `g` / `G`: jump to first or last row in the focused list
+- `z` / `o`: zoom the selected artifact or pane output
 - `s`: run `council start --instance <instance>`
-- `a`: attach/switch to the selected live pane, or run `council attach`
-- `u`: run `council resume <run-id>`
+- `a`: attach/switch to the selected pane, or run `council attach`
+- `r`: run `council resume <run-id>`
 - `e`: run `council exec <run-id>`
 - `R`: confirm and run `council reset --instance <instance>`
-- `r` / `Ctrl+R`: refresh immediately
+- `Ctrl+R`: refresh immediately
 - `/`: filter by run id, task, workspace, instance, phase, or stage
 - `P`: return to project picker
 - `q`: quit
@@ -103,17 +98,16 @@ The command bar is clickable in terminals with mouse reporting:
 [Start] [Attach] [Resume] [Exec] [Zoom] [Reset] [Refresh] [Quit]
 ```
 
-Clicking a run selects it; mouse wheel scrolls artifact and modal content.
+Clicking a run, artifact, or pane selects it. Mouse wheel scrolls zoomed
+artifact or pane content.
 
-Artifact modal:
+Zoom view:
 
 - `j` / `k`: scroll line by line
-- `Ctrl+D` / `Ctrl+U`: scroll by half a screen
-- `PageDown` / `PageUp`: scroll by half a screen
+- `Ctrl+D` / `Ctrl+U`: scroll by a screen
+- `PageDown` / `PageUp`: scroll by a screen
 - `g` / `G`: jump to top or bottom
-- `h` / `l`: switch artifact section
-- `Tab` / `Shift+Tab`: switch artifact agent
-- `Esc`, `q`, or `o`: close the modal
+- `Esc`, `q`, `o`, or `z`: close zoom
 
 ## Protocol Boundary
 
@@ -139,9 +133,9 @@ It also reads live tmux state with:
 tmux list-panes -a -F '#{pane_id} ... #{@name} #{@maestro_council_workspace}'
 ```
 
-The initial repo intentionally does not reimplement `council run`,
-`council plan`, `council exec`, or `council resume`. Those remain protocol
-producers.
+The UI intentionally does not reimplement `council run`, `council plan`,
+`council exec`, or `council resume`. Those remain protocol producers invoked
+through the configured `council` executable.
 
 ## Direction
 

@@ -271,7 +271,7 @@ func TestMouseClickSelectsRenderedRun(t *testing.T) {
 
 	next, _ := model.updateMouse(tea.MouseMsg{
 		X:      2,
-		Y:      lipgloss.Height(model.renderTop()) + 4,
+		Y:      model.layout().runFirstRowY + 1,
 		Button: tea.MouseButtonLeft,
 		Action: tea.MouseActionPress,
 	})

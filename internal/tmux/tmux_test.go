@@ -28,7 +28,7 @@ func TestParseCouncilLabel(t *testing.T) {
 }
 
 func TestListPanes(t *testing.T) {
-	runner := &fakeRunner{out: "%1\ts\t@1\t2\tmaestro-council-feature-a\t80x24\tcodex\tcouncil-codex-feature-a\t/tmp/work\n"}
+	runner := &fakeRunner{out: "%1\ts\t@1\t2\tmaestro-council-feature-a\t80x24\tcodex\tcouncil-codex-feature-a\t/tmp/work\t1\n"}
 	client := Client{Runner: runner}
 
 	panes, err := client.ListPanes(context.Background())
@@ -40,6 +40,9 @@ func TestListPanes(t *testing.T) {
 	}
 	if panes[0].Role != "codex" || panes[0].Instance != "feature-a" {
 		t.Fatalf("pane = %#v", panes[0])
+	}
+	if !panes[0].Active {
+		t.Fatalf("pane active = false, want true")
 	}
 }
 

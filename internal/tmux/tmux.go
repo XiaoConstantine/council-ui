@@ -48,6 +48,7 @@ type Pane struct {
 	Workspace string
 	Role      string
 	Instance  string
+	Active    bool
 }
 
 type Council struct {
@@ -66,7 +67,7 @@ func (c Client) ListPanes(ctx context.Context) ([]Pane, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	out, err := runner.Run(ctx, "tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}\t#{pane_width}x#{pane_height}\t#{pane_current_command}\t#{@name}\t#{@maestro_council_workspace}")
+	out, err := runner.Run(ctx, "tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}\t#{pane_width}x#{pane_height}\t#{pane_current_command}\t#{@name}\t#{@maestro_council_workspace}\t#{pane_active}")
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +78,7 @@ func (c Client) ListPanes(ctx context.Context) ([]Pane, error) {
 			continue
 		}
 		fields := strings.Split(line, "\t")
-		for len(fields) < 9 {
+		for len(fields) < 10 {
 			fields = append(fields, "")
 		}
 		pane := Pane{
@@ -90,6 +91,7 @@ func (c Client) ListPanes(ctx context.Context) ([]Pane, error) {
 			Command:   fields[6],
 			Label:     fields[7],
 			Workspace: fields[8],
+			Active:    fields[9] == "1",
 		}
 		pane.Role, pane.Instance = ParseCouncilLabel(pane.Label)
 		if pane.Role == "" {
