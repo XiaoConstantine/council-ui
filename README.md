@@ -104,7 +104,7 @@ Dashboard:
 The command bar is clickable in terminals with mouse reporting:
 
 ```text
-[Start] [Attach] [Resume] [Exec] [Cancel] [Zoom] [Reset] [Refresh] [Quit]
+[s Start] [a Attach] [r Resume] [e Exec] [c Cancel] [z Zoom] [R Reset] [^R Refresh] [q Quit]
 ```
 
 Clicking a run, artifact, or pane selects it. Mouse wheel scrolls zoomed

@@ -202,13 +202,24 @@ func TestCommandButtonAtMapsVisibleButtons(t *testing.T) {
 		t.Fatalf("first action = %q, want start", got)
 	}
 
-	zoomX := len("Actions [Start] [Attach] [Resume] [Exec] [Cancel] ")
+	zoomX := len("Actions [s Start] [a Attach] [r Resume] [e Exec] [c Cancel] ")
 	if got := model.commandButtonAt(zoomX); got != "zoom" {
 		t.Fatalf("zoom action = %q, want zoom", got)
 	}
 
 	if got := model.commandButtonAt(0); got != "" {
 		t.Fatalf("prefix action = %q, want empty", got)
+	}
+}
+
+func TestCommandBarShowsActionKeys(t *testing.T) {
+	model := New(Options{Home: "/tmp"})
+	bar := model.commandBarPlain()
+
+	for _, token := range []string{"[s Start]", "[a Attach]", "[r Resume]", "[e Exec]", "[c Cancel]", "[z Zoom]", "[R Reset]", "[^R Refresh]", "[q Quit]"} {
+		if !strings.Contains(bar, token) {
+			t.Fatalf("command bar %q missing %q", bar, token)
+		}
 	}
 }
 

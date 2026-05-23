@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/XiaoConstantine/council-ui/internal/protocol"
 	"github.com/XiaoConstantine/council-ui/internal/tmux"
@@ -27,6 +28,7 @@ type Options struct {
 
 type commandButton struct {
 	Label  string
+	Key    string
 	Action string
 }
 
@@ -137,15 +139,15 @@ type actionDoneMsg struct {
 type tickMsg struct{}
 
 var commandButtons = []commandButton{
-	{Label: "Start", Action: "start"},
-	{Label: "Attach", Action: "attach"},
-	{Label: "Resume", Action: "resume"},
-	{Label: "Exec", Action: "exec"},
-	{Label: "Cancel", Action: "cancel"},
-	{Label: "Zoom", Action: "zoom"},
-	{Label: "Reset", Action: "reset"},
-	{Label: "Refresh", Action: "refresh"},
-	{Label: "Quit", Action: "quit"},
+	{Label: "Start", Key: "s", Action: "start"},
+	{Label: "Attach", Key: "a", Action: "attach"},
+	{Label: "Resume", Key: "r", Action: "resume"},
+	{Label: "Exec", Key: "e", Action: "exec"},
+	{Label: "Cancel", Key: "c", Action: "cancel"},
+	{Label: "Zoom", Key: "z", Action: "zoom"},
+	{Label: "Reset", Key: "R", Action: "reset"},
+	{Label: "Refresh", Key: "^R", Action: "refresh"},
+	{Label: "Quit", Key: "q", Action: "quit"},
 }
 
 func New(opts Options) Model {
@@ -851,7 +853,7 @@ func (m Model) renderCommandBar() string {
 func (m Model) commandBarPlain() string {
 	parts := make([]string, 0, len(commandButtons))
 	for _, button := range commandButtons {
-		parts = append(parts, "["+button.Label+"]")
+		parts = append(parts, button.Token())
 	}
 	return strings.Join(parts, " ")
 }
@@ -862,13 +864,20 @@ func (m Model) commandButtonAt(x int) string {
 		return ""
 	}
 	for _, button := range commandButtons {
-		token := "[" + button.Label + "]"
+		token := button.Token()
 		if x >= pos && x < pos+len(token) {
 			return button.Action
 		}
 		pos += len(token) + 1
 	}
 	return ""
+}
+
+func (b commandButton) Token() string {
+	if b.Key == "" {
+		return "[" + b.Label + "]"
+	}
+	return "[" + b.Key + " " + b.Label + "]"
 }
 
 func (m Model) renderProjectTop() string {
@@ -2109,11 +2118,7 @@ func truncate(value string, width int) string {
 	if width <= 1 {
 		return ""
 	}
-	runes := []rune(value)
-	if len(runes) <= width {
-		return value
-	}
-	return string(runes[:width-1]) + "…"
+	return ansi.Truncate(value, width, "…")
 }
 
 func pad(value string, width int) string {
